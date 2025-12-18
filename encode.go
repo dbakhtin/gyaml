@@ -1,0 +1,712 @@
+package gyaml
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/denisbakhtin/gyaml/printer"
+	"github.com/denisbakhtin/gyaml/token"
+	"github.com/goccy/go-yaml/ast"
+)
+
+const (
+	// DefaultIndentSpaces default number of space for indent
+	DefaultIndentSpaces = 2
+)
+
+// Encoder writes YAML values to an output stream.
+type Encoder struct {
+	writer                     io.Writer
+	opts                       []EncodeOption
+	singleQuote                bool
+	isFlowStyle                bool
+	isJSONStyle                bool
+	useJSONMarshaler           bool
+	enableSmartAnchor          bool
+	aliasRefToName             map[uintptr]string
+	anchorRefToName            map[uintptr]string
+	anchorNameMap              map[string]struct{}
+	anchorCallback             func(*ast.AnchorNode, interface{}) error
+	customMarshalerMap         map[reflect.Type]func(context.Context, interface{}) ([]byte, error)
+	omitZero                   bool
+	omitEmpty                  bool
+	autoInt                    bool
+	useLiteralStyleIfMultiline bool
+	//TODO: implement
+	//commentMap                 map[*Path][]*Comment
+	written bool
+
+	line           int
+	column         int
+	offset         int
+	indentNum      int
+	indentLevel    int
+	indentSequence bool
+
+	//My code:
+	//printingSlice is set to true the first time (level) I see the slice
+	//so if I see a nested slice I use indent to print it. First slice is
+	//printed without indent (see [encodeMap])
+	printingSlice bool
+
+	printer printer.Printer
+}
+
+// NewEncoder returns a new encoder that writes to w.
+// The Encoder should be closed after use to flush all data to w.
+func NewEncoder(w io.Writer, opts ...EncodeOption) *Encoder {
+	return &Encoder{
+		writer: w,
+		opts:   opts,
+		//TODO: can get rid of?
+		customMarshalerMap: map[reflect.Type]func(context.Context, interface{}) ([]byte, error){},
+
+		line:            1,
+		column:          1,
+		offset:          0,
+		indentNum:       DefaultIndentSpaces,
+		anchorRefToName: make(map[uintptr]string),
+		anchorNameMap:   make(map[string]struct{}),
+		aliasRefToName:  make(map[uintptr]string),
+	}
+}
+
+func (e *Encoder) print(value any, breakLine bool) {
+	e.writer.Write(e.printer.Print(value, breakLine))
+}
+
+// Encode writes the YAML encoding of v to the stream.
+// If multiple items are encoded to the stream,
+// the second and subsequent document will be preceded with a "---" document separator,
+// but the first will not.
+//
+// See the documentation for Marshal for details about the conversion of Go values to YAML.
+func (e *Encoder) Encode(v interface{}) error {
+	return e.EncodeContext(context.Background(), v)
+}
+
+// EncodeContext writes the YAML encoding of v to the stream with context.Context.
+func (e *Encoder) EncodeContext(ctx context.Context, v interface{}) error {
+	/*
+		node, err := e.EncodeToNodeContext(ctx, v)
+		if err != nil {
+			return err
+		}
+		if err := e.setCommentByCommentMap(node); err != nil {
+			return err
+		}
+		if !e.written {
+			e.written = true
+		} else {
+			// write document separator
+			_, _ = e.writer.Write([]byte("---\n"))
+		}
+		var p printer.Printer
+		_, _ = e.writer.Write(p.PrintNode(node))
+		return nil
+	*/
+	_, err := e.EncodeToNodeContext(ctx, v)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// EncodeToNodeContext convert v to ast.Node with context.Context.
+func (e *Encoder) EncodeToNodeContext(ctx context.Context, v interface{}) (ast.Node, error) {
+	for _, opt := range e.opts {
+		if err := opt(e); err != nil {
+			return nil, err
+		}
+	}
+	if e.enableSmartAnchor {
+		// during the first encoding, store all mappings between alias addresses and their names.
+		if _, err := e.encodeValue(ctx, reflect.ValueOf(v), 1, true); err != nil {
+			return nil, err
+		}
+		e.clearSmartAnchorRef()
+	}
+	node, err := e.encodeValue(ctx, reflect.ValueOf(v), 1, true)
+	if err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
+func (e *Encoder) setCommentByCommentMap(node ast.Node) error {
+	//TODO: copy or implement
+	return nil
+}
+
+// TODO: need to rename some encode* methods, because now encodeValue also prints to writer
+// but e.x. encodeString returns string value. Need some consistency.
+// breakLine: if true, append \n to the end
+func (e *Encoder) encodeValue(ctx context.Context, v reflect.Value, column int, breakLine bool) (ast.Node, error) {
+	if e.isInvalidValue(v) {
+		e.print(e.encodeNil(), breakLine)
+		return nil, nil
+		//return e.encodeNil(), nil
+	}
+	/*
+		if e.canEncodeByMarshaler(v) {
+			node, err := e.encodeByMarshaler(ctx, v, column)
+			if err != nil {
+				return nil, err
+			}
+			return node, nil
+		}
+	*/
+	switch v.Type().Kind() {
+
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		//return e.encodeInt(v.Int()), nil
+		e.print(e.encodeInt(v.Int()), breakLine)
+		return nil, nil
+
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		//return e.encodeUint(v.Uint()), nil
+		e.print(e.encodeUint(v.Uint()), breakLine)
+		return nil, nil
+
+	case reflect.Float32:
+		//return e.encodeFloat(v.Float(), 32), nil
+		e.print(e.encodeFloat(v.Float(), 32), breakLine)
+		return nil, nil
+	case reflect.Float64:
+		//return e.encodeFloat(v.Float(), 64), nil
+		e.print(e.encodeFloat(v.Float(), 64), breakLine)
+		return nil, nil
+
+	case reflect.Ptr:
+		if value := e.encodePtrAnchor(v, column); value != nil {
+			return value, nil
+		}
+		return e.encodeValue(ctx, v.Elem(), column, true)
+
+	case reflect.Interface:
+		return e.encodeValue(ctx, v.Elem(), column, true)
+
+	case reflect.String:
+		//return e.encodeString(v.String(), column), nil
+		e.print(e.encodeString(v.String(), column), breakLine)
+		return nil, nil
+
+	case reflect.Bool:
+		//return e.encodeBool(v.Bool()), nil
+		e.print(e.encodeBool(v.Bool()), breakLine)
+		return nil, nil
+
+	case reflect.Slice, reflect.Array:
+		/*
+			if mapSlice, ok := v.Interface().(MapSlice); ok {
+				return e.encodeMapSlice(ctx, mapSlice, column)
+			}
+			if value := e.encodePtrAnchor(v, column); value != nil {
+				return value, nil
+			}
+			return e.encodeSlice(ctx, v)
+		*/
+		e.encodeSlice(ctx, v, column)
+		return nil, nil
+
+		//case reflect.Array:
+		//	return e.encodeArray(ctx, v)
+
+	case reflect.Struct:
+		if v.CanInterface() {
+			/*
+				if mapItem, ok := v.Interface().(MapItem); ok {
+					return e.encodeMapItem(ctx, mapItem, column)
+				}
+			*/
+			if t, ok := v.Interface().(time.Time); ok {
+				value := e.encodeTime(t, column)
+				e.print(value, breakLine)
+				return nil, nil
+			}
+		}
+		return e.encodeStruct(ctx, v, column)
+
+	case reflect.Map:
+		if value := e.encodePtrAnchor(v, column); value != nil {
+			return value, nil
+		}
+		return e.encodeMap(ctx, v, column)
+	default:
+		return nil, fmt.Errorf("unknown value type %s", v.Type().String())
+	}
+}
+
+func (e *Encoder) clearSmartAnchorRef() {
+	if !e.enableSmartAnchor {
+		return
+	}
+	e.anchorRefToName = make(map[uintptr]string)
+	e.anchorNameMap = make(map[string]struct{})
+}
+
+func (e *Encoder) isInvalidValue(v reflect.Value) bool {
+	if !v.IsValid() {
+		return true
+	}
+	kind := v.Type().Kind()
+	if kind == reflect.Ptr && v.IsNil() {
+		return true
+	}
+	if kind == reflect.Interface && v.IsNil() {
+		return true
+	}
+	return false
+}
+
+func (e *Encoder) encodeNil() string {
+	value := "null"
+	//return ast.Null(token.New(value, value, e.pos(e.column)))
+	return value
+}
+
+func (e *Encoder) encodePtrAnchor(v reflect.Value, column int) ast.Node {
+	/*
+		anchorName, exists := e.getAnchor(v.Pointer())
+		if !exists {
+			return nil
+		}
+		aliasName := anchorName
+		alias := ast.Alias(token.New("*", "*", e.pos(column)))
+		alias.Value = ast.String(token.New(aliasName, aliasName, e.pos(column)))
+		e.setSmartAlias(aliasName, v.Pointer())
+		return alias
+	*/
+	return nil
+}
+
+func (e *Encoder) getAnchor(ref uintptr) (string, bool) {
+	anchorName, exists := e.anchorRefToName[ref]
+	return anchorName, exists
+}
+
+func (e *Encoder) encodeString(v string, column int) string {
+	if e.isNeedQuoted(v) {
+		if e.singleQuote {
+			v = quoteWith(v, '\'')
+		} else {
+			v = strconv.Quote(v)
+		}
+	}
+
+	lbc := token.DetectLineBreakCharacter(v)
+	multiline := strings.Contains(v, lbc)
+	if multiline {
+		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
+		// It works mostly, but inconsistencies occur if line break characters are mixed.
+		header := token.LiteralBlockHeader(v)
+		space := strings.Repeat(" ", column-1)
+		indent := strings.Repeat(" ", e.indentNum)
+		values := []string{}
+		for _, v := range strings.Split(v, lbc) {
+			values = append(values, fmt.Sprintf("%s%s%s", space, indent, v))
+		}
+		block := strings.TrimSuffix(strings.TrimSuffix(strings.Join(values, lbc), fmt.Sprintf("%s%s%s", lbc, indent, space)), fmt.Sprintf("%s%s", indent, space))
+		return fmt.Sprintf("%s%s%s", header, lbc, block)
+	} else if len(v) > 0 && (v[0] == '{' || v[0] == '[') {
+		return fmt.Sprintf(`'%s'`, v)
+	}
+
+	if v == "hello" {
+		log.Println("hello")
+	}
+	if !multiline {
+		v = strings.Repeat(" ", column-1) + v
+	}
+
+	return v
+}
+
+func (e *Encoder) isNeedQuoted(v string) bool {
+	if e.isJSONStyle {
+		return true
+	}
+	if e.useLiteralStyleIfMultiline && strings.ContainsAny(v, "\n\r") {
+		return false
+	}
+	if e.isFlowStyle && strings.ContainsAny(v, `]},'"`) {
+		return true
+	}
+	if e.isFlowStyle {
+		for i := 0; i < len(v); i++ {
+			if v[i] != ':' {
+				continue
+			}
+			if i+1 < len(v) && v[i+1] == '/' {
+				continue
+			}
+			return true
+		}
+	}
+	if token.IsNeedQuoted(v) {
+		return true
+	}
+	return false
+}
+
+func (e *Encoder) encodeMap(ctx context.Context, value reflect.Value, column int) (ast.Node, error) {
+	mapKeys := value.MapKeys()
+	keys := make([]any, len(mapKeys))
+	for i, k := range mapKeys {
+		keys[i] = k.Interface()
+	}
+	//why sort? For testing?
+	sort.Slice(keys, func(i, j int) bool {
+		return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j])
+	})
+	for _, key := range keys {
+		k := reflect.ValueOf(key)
+		v := value.MapIndex(k)
+		if v.Kind() == reflect.Interface {
+			v = v.Elem()
+		}
+
+		isSlice := v.Kind() == reflect.Slice || v.Kind() == reflect.Array
+		isSequence := isSlice || v.Kind() == reflect.Map
+		log.Println(isSequence, k, v)
+		col := column
+
+		_, err := e.encodeValue(ctx, k, col, false)
+		if isSequence && !e.isFlowStyle {
+			//if e.printingSlice {
+			col += e.indentNum
+			//}
+		}
+		if err != nil {
+			return nil, err
+		}
+		//TODO: move print out?
+		//if printing slice & its not FlowStyle, break the line after : without trailing space
+
+		if isSequence && !e.isFlowStyle {
+			e.print(":", true)
+		} else {
+			e.print(": ", false)
+		}
+		_, err = e.encodeValue(ctx, v, col, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, nil
+}
+
+func (e *Encoder) encodeBool(v bool) string {
+	return strconv.FormatBool(v)
+}
+
+func (e *Encoder) encodeInt(v int64) string {
+	return strconv.FormatInt(v, 10)
+}
+
+func (e *Encoder) encodeUint(v uint64) string {
+	return strconv.FormatUint(v, 10)
+}
+
+func (e *Encoder) encodeFloat(v float64, bitSize int) string {
+	if v == math.Inf(0) {
+		return ".inf"
+	} else if v == math.Inf(-1) {
+		return "-.inf"
+	} else if math.IsNaN(v) {
+		return ".nan"
+	}
+	value := strconv.FormatFloat(v, 'g', -1, bitSize)
+	if !strings.Contains(value, ".") && !strings.Contains(value, "e") {
+		if e.autoInt {
+			return value
+		}
+		// append x.0 suffix to keep float value context
+		return fmt.Sprintf("%s.0", value)
+	}
+	return value
+}
+
+func (e *Encoder) encodeSlice(ctx context.Context, value reflect.Value, column int) (*ast.SequenceNode, error) {
+	if e.indentSequence {
+		//e.column += e.indentNum
+		//defer func() { e.column -= e.indentNum }()
+		column += e.indentNum
+	} else {
+		//my kostil
+		printingSliceOld := e.printingSlice
+		e.printingSlice = true
+		defer func() { e.printingSlice = printingSliceOld }()
+	}
+
+	indent := strings.Repeat(" ", column-1)
+	//sequence := ast.Sequence(token.New("-", "-", e.pos(column)), e.isFlowStyle)
+	for i := 0; i < value.Len(); i++ {
+		//TODO: move print out?
+		e.print(indent+"- ", false)
+		//TODO: respect e.isFlowStyle
+		_, err := e.encodeValue(ctx, value.Index(i), column, true)
+		if err != nil {
+			return nil, err
+		}
+		//sequence.Values = append(sequence.Values, node)
+	}
+	//return sequence, nil
+	return nil, nil
+}
+
+func (e *Encoder) encodeTime(v time.Time, column int) string {
+	value := v.Format(time.RFC3339Nano)
+	if e.isJSONStyle {
+		value = strconv.Quote(value)
+	}
+	return value
+}
+
+func (e *Encoder) encodeStruct(ctx context.Context, value reflect.Value, column int) (ast.Node, error) {
+	//node := ast.Mapping(token.New("", "", e.pos(column)), e.isFlowStyle)
+	structType := value.Type()
+	fieldMap, err := structFieldMap(structType)
+	if err != nil {
+		return nil, err
+	}
+	//hasInlineAnchorField := false
+	//var inlineAnchorValue reflect.Value
+	for i := 0; i < value.NumField(); i++ {
+		field := structType.Field(i)
+		if isIgnoredStructField(field) {
+			continue
+		}
+		fieldValue := value.FieldByName(field.Name)
+		sf := fieldMap[field.Name]
+		if (e.omitZero || sf.IsOmitZero) && e.isOmittedByOmitZero(fieldValue) {
+			// omit encoding by omitzero tag or OmitZero option.
+			continue
+		}
+		if e.omitEmpty && e.isOmittedByOmitEmptyOption(fieldValue) {
+			// omit encoding by OmitEmpty option.
+			continue
+		}
+		if sf.IsOmitEmpty && e.isOmittedByOmitEmptyTag(fieldValue) {
+			// omit encoding by omitempty tag.
+			continue
+		}
+		ve := e
+		if !e.isFlowStyle && sf.IsFlow {
+			ve = &Encoder{}
+			*ve = *e
+			ve.isFlowStyle = true
+		}
+		_, err := ve.encodeValue(ctx, fieldValue, column, true)
+		if err != nil {
+			return nil, err
+		}
+		/*
+				if e.isMapNode(encoded) {
+					encoded.AddColumn(e.indentNum)
+				}
+
+			var key ast.MapKeyNode = e.encodeString(sf.RenderName, column)
+			switch {
+			case encoded.Type() == ast.AliasType:
+				if aliasName := sf.AliasName; aliasName != "" {
+					alias, ok := encoded.(*ast.AliasNode)
+					if !ok {
+						return nil, errors.ErrUnexpectedNodeType(encoded.Type(), ast.AliasType, encoded.GetToken())
+					}
+					got := alias.Value.String()
+					if aliasName != got {
+						return nil, fmt.Errorf("expected alias name is %q but got %q", aliasName, got)
+					}
+				}
+				if sf.IsInline {
+					// if both used alias and inline, output `<<: *alias`
+					key = ast.MergeKey(token.New("<<", "<<", e.pos(column)))
+				}
+			case sf.AnchorName != "":
+				anchorNode, err := e.encodeAnchor(sf.AnchorName, encoded, fieldValue, column)
+				if err != nil {
+					return nil, err
+				}
+				encoded = anchorNode
+			case sf.IsInline:
+				isAutoAnchor := sf.IsAutoAnchor
+				if !hasInlineAnchorField {
+					hasInlineAnchorField = isAutoAnchor
+				}
+				if isAutoAnchor {
+					inlineAnchorValue = fieldValue
+				}
+				mapNode, ok := encoded.(ast.MapNode)
+				if !ok {
+					// if an inline field is null, skip encoding it
+					if _, ok := encoded.(*ast.NullNode); ok {
+						continue
+					}
+					return nil, errors.New("inline value is must be map or struct type")
+				}
+				mapIter := mapNode.MapRange()
+				for mapIter.Next() {
+					mapKey := mapIter.Key()
+					mapValue := mapIter.Value()
+					keyName := mapKey.GetToken().Value
+					if fieldMap.isIncludedRenderName(keyName) {
+						// if declared the same key name, skip encoding this field
+						continue
+					}
+					mapKey.AddColumn(-e.indentNum)
+					mapValue.AddColumn(-e.indentNum)
+					node.Values = append(node.Values, ast.MappingValue(nil, mapKey, mapValue))
+				}
+				continue
+			case sf.IsAutoAnchor:
+				anchorNode, err := e.encodeAnchor(sf.RenderName, encoded, fieldValue, column)
+				if err != nil {
+					return nil, err
+				}
+				encoded = anchorNode
+			}
+			node.Values = append(node.Values, ast.MappingValue(nil, key, encoded))
+		*/
+	}
+	/*
+		if hasInlineAnchorField {
+			node.AddColumn(e.indentNum)
+			anchorName := "anchor"
+			anchorNode := ast.Anchor(token.New("&", "&", e.pos(column)))
+			anchorNode.Name = ast.String(token.New(anchorName, anchorName, e.pos(column)))
+			anchorNode.Value = node
+			if e.anchorCallback != nil {
+				if err := e.anchorCallback(anchorNode, value.Addr().Interface()); err != nil {
+					return nil, err
+				}
+				if snode, ok := anchorNode.Name.(*ast.StringNode); ok {
+					anchorName = snode.Value
+				}
+			}
+			if inlineAnchorValue.Kind() == reflect.Ptr {
+				e.setAnchor(inlineAnchorValue.Pointer(), anchorName)
+			}
+			return anchorNode, nil
+		}
+			return node, nil
+	*/
+	return nil, nil
+}
+
+// IsZeroer is used to check whether an object is zero to determine
+// whether it should be omitted when marshaling with the omitempty flag.
+// One notable implementation is time.Time.
+type IsZeroer interface {
+	IsZero() bool
+}
+
+func (e *Encoder) isOmittedByOmitZero(v reflect.Value) bool {
+	kind := v.Kind()
+	if z, ok := v.Interface().(IsZeroer); ok {
+		if (kind == reflect.Ptr || kind == reflect.Interface) && v.IsNil() {
+			return true
+		}
+		return z.IsZero()
+	}
+	switch kind {
+	case reflect.String:
+		return len(v.String()) == 0
+	case reflect.Interface, reflect.Ptr, reflect.Slice, reflect.Map:
+		return v.IsNil()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Struct:
+		vt := v.Type()
+		for i := v.NumField() - 1; i >= 0; i-- {
+			if vt.Field(i).PkgPath != "" {
+				continue // private field
+			}
+			if !e.isOmittedByOmitZero(v.Field(i)) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (e *Encoder) isOmittedByOmitEmptyOption(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.String:
+		return len(v.String()) == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	case reflect.Slice, reflect.Map:
+		return v.Len() == 0
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	}
+	return false
+}
+
+// The current implementation of the omitempty tag combines the functionality of encoding/json's omitempty and omitzero tags.
+// This stems from a historical decision to respect the implementation of gopkg.in/yaml.v2, but it has caused confusion,
+// so we are working to integrate it into the functionality of encoding/json. (However, this will take some time.)
+// In the current implementation, in addition to the exclusion conditions of omitempty,
+// if a type implements IsZero, that implementation will be used.
+// Furthermore, for non-pointer structs, if all fields are eligible for exclusion,
+// the struct itself will also be excluded. These behaviors are originally the functionality of omitzero.
+func (e *Encoder) isOmittedByOmitEmptyTag(v reflect.Value) bool {
+	kind := v.Kind()
+	if z, ok := v.Interface().(IsZeroer); ok {
+		if (kind == reflect.Ptr || kind == reflect.Interface) && v.IsNil() {
+			return true
+		}
+		return z.IsZero()
+	}
+	switch kind {
+	case reflect.String:
+		return len(v.String()) == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	case reflect.Slice, reflect.Map:
+		return v.Len() == 0
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Struct:
+		vt := v.Type()
+		for i := v.NumField() - 1; i >= 0; i-- {
+			if vt.Field(i).PkgPath != "" {
+				continue // private field
+			}
+			if !e.isOmittedByOmitEmptyTag(v.Field(i)) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
