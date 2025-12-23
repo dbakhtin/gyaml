@@ -698,9 +698,6 @@ func IsNeedQuoted(value string) bool {
 	case ':', ' ':
 		return true
 	}
-	if isTimestamp(value) {
-		return true
-	}
 	for i, c := range value {
 		switch c {
 		case '#', '\\':
@@ -711,7 +708,8 @@ func IsNeedQuoted(value string) bool {
 			}
 		}
 	}
-	return false
+	//TODO: should optimize isTimestamp?
+	return isTimestamp(value)
 }
 
 // LiteralBlockHeader detect literal block scalar header
