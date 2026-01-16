@@ -708,7 +708,7 @@ func IsNeedQuoted(value string) bool {
 			}
 		}
 	}
-	//TODO: should optimize isTimestamp?
+	//TODO: should optimize isTimestamp? use regexp maybe
 	return isTimestamp(value)
 }
 

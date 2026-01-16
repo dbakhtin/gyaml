@@ -38,3 +38,42 @@ func (o tagOptions) Contains(optionName string) bool {
 	}
 	return false
 }
+
+// ContainsWithPrefix reports whether a comma-separated list of options
+// contains an exact substr flag or a value that is prefixed by "flag=". substr must be surrounded by a
+// string boundary or commas.
+func (o tagOptions) ContainsWithPrefix(optionName string) bool {
+	if len(o) == 0 {
+		return false
+	}
+	s := string(o)
+	optionNamePref := optionName + "="
+	for s != "" {
+		var name string
+		name, s, _ = strings.Cut(s, ",")
+		if name == optionName || strings.HasPrefix(name, optionNamePref) {
+			return true
+		}
+	}
+	return false
+}
+
+func (o tagOptions) NamedValue(optionName string) string {
+	if len(o) == 0 {
+		return ""
+	}
+	s := string(o)
+	optionNamePref := optionName + "="
+	for s != "" {
+		var name string
+		name, s, _ = strings.Cut(s, ",")
+		if strings.HasPrefix(name, optionNamePref) {
+			parts := strings.Split(name, "=")
+			if len(parts) < 2 {
+				return ""
+			}
+			return parts[1]
+		}
+	}
+	return ""
+}

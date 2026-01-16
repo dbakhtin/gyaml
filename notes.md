@@ -1,15 +1,25 @@
 # Differencies from original go-yaml
-* Float number 'e' notation
-* Default struct names are printed as is, not lowercased
-* Float 1.0 is encoded as 1
-* Float 1e-07 is encoded as 1e-7
-* Does not support math.Inf, math.NaN
-* Does not support map[float64]any, map[bool]any
+* No MarhshalWithOptions, encoder declaration is closer to encoding/json. So use NewEncoder(...).WithOption for advanced cases.
+* No custom marshalers map, implement MarshalYAML for field types & MarshalText for map fields similar to encoding/json
+* Smart anchor is enabled for structs by default. That means if encoder sees an anchor name collision it adds a unique number suffix.
+* No smart anchors for maps
+* No MapSlice data type
+* No JSON marshaler
+* No yaml comments
+* Embedded structs are inlined by default with same priority shadowing as in encoding/json
+* Faster upto 6 times than go-yaml ymmv, see example
+* Less gc pressure & memory consumption upto 10 times ymmv, same example
 
+# TODO
+* Move valueIsStruct & other checks to params with flag
+* Optimize marked with //TODO: functions & algorithms
+* Optimize options & argument options
+* Commented tests with isEmpty for structs
 
-# Restart again
-* Move slowly from simple cases to complex
-* Constuctors: (Marshal (with indent ofc) with basic defaults), Encoder with Options (see v2 json pattern) (flow, quote styles options also)
-* Calculate indent correctly. Take encoders pattern from json & adapt/replace code from yaml encoders
-* Learn buffer basics, grow, etc
-* Copy tests from go-yaml one by one. Basic tests for all types of data first + nesting. Border cases last
+# Decoder
+* fuzz_test.go
+* yaml_test.go
+
+# Printing indents
+* Dont forget to commit before trying new features!!!
+* Consider implementing bitmap options. And move encoder.inSlice & such to bitmap options that are passed as parameter to encoder (opts argument)

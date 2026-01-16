@@ -1,49 +1,100 @@
 package gyaml
 
-// EncodeOption functional option type for Encoder
-type EncodeOption func(e *Encoder) error
+// TODO: consider using a bitmap for bool values (and move map* to encoder)?
+type encoderOptions struct {
+	singleQuote      bool
+	isFlowStyle      bool
+	isJSONStyle      bool
+	useJSONMarshaler bool
+	//each time there is an anchor name collision add suffix numbers to anchor name, true by default
+	//enableSmartAnchor bool
+	// anchors & aliases
+	aliasRefToName map[uintptr]string
+	anchors        map[uintptr]string
+	anchorNames    map[string]uintptr
+	//anchorCallback             func(*ast.AnchorNode, interface{}) error
+	//customMarshalerMap         map[reflect.Type]func(any) ([]byte, error)
+	omitZero                   bool
+	omitEmpty                  bool
+	autoInt                    bool
+	useLiteralStyleIfMultiline bool
+	commentMap                 map[*Path][]*Comment
+	indentSequence             bool
 
-// IndentSequence causes sequence values to be indented the same value as Indent
-func IndentSequence(indent bool) EncodeOption {
+	//TODO: switch to indentSize int
+	indentValue string
+
+	//local options
+	level   int
+	inSlice bool
+}
+
+func defaultEncoderOptions() encoderOptions {
+	return encoderOptions{
+		indentValue: "  ",
+		//enableSmartAnchor: true,
+		anchors:     make(map[uintptr]string),
+		anchorNames: make(map[string]uintptr),
+	}
+}
+
+/*
+// DecodeOption functional option type for Decoder
+type DecodeOption func(d *Decoder) error
+
+// CustomMarshaler overrides any encoding process for the type specified in generics.
+//
+// NOTE: If type T implements MarshalYAML for pointer receiver, the type specified in CustomMarshaler must be *T.
+// If RegisterCustomMarshaler and CustomMarshaler of EncodeOption are specified for the same type,
+// the CustomMarshaler specified in EncodeOption takes precedence.
+func CustomMarshaler[T any](marshaler func(T) ([]byte, error)) EncodeOption {
 	return func(e *Encoder) error {
-		//e.indentSequence = indent
+		var typ T
+		e.customMarshalerMap[reflect.TypeOf(typ)] = func(ctx context.Context, v interface{}) ([]byte, error) {
+			return marshaler(v.(T))
+		}
 		return nil
 	}
 }
 
-// UseLiteralStyleIfMultiline causes encoding multiline strings with a literal syntax,
-// no matter what characters they include
-func UseLiteralStyleIfMultiline(useLiteralStyleIfMultiline bool) EncodeOption {
+// CustomMarshalerContext overrides any encoding process for the type specified in generics.
+// Similar to CustomMarshaler, but allows passing a context to the marshaler function.
+func CustomMarshalerContext[T any](marshaler func(context.Context, T) ([]byte, error)) EncodeOption {
 	return func(e *Encoder) error {
-		//e.useLiteralStyleIfMultiline = useLiteralStyleIfMultiline
+		var typ T
+		e.customMarshalerMap[reflect.TypeOf(typ)] = func(ctx context.Context, v interface{}) ([]byte, error) {
+			return marshaler(ctx, v.(T))
+		}
 		return nil
 	}
 }
 
-// OmitEmpty behaves in the same way as the interpretation of the omitempty tag in the encoding/json library.
-// set on all the fields.
-// In the current implementation, the omitempty tag is not implemented in the same way as encoding/json,
-// so please specify this option if you expect the same behavior.
-func OmitEmpty() EncodeOption {
+// WithComment add a comment using the location and text information given in the CommentMap.
+func WithComment(cm CommentMap) EncodeOption {
 	return func(e *Encoder) error {
-		//e.omitEmpty = true
+		commentMap := map[*Path][]*Comment{}
+		for k, v := range cm {
+			//path, err := PathString(k)
+			_ = k
+			path, err := &Path{}, error(nil)
+			if err != nil {
+				return err
+			}
+			commentMap[path] = v
+		}
+		e.commentMap = commentMap
 		return nil
 	}
 }
 
-// OmitZero forces the encoder to assume an `omitzero` struct tag is
-// set on all the fields. See `Marshal` commentary for the `omitzero` tag logic.
-func OmitZero() EncodeOption {
-	return func(e *Encoder) error {
-		//e.omitZero = true
+// CommentToMap apply the position and content of comments in a YAML document to a CommentMap.
+func CommentToMap(cm CommentMap) DecodeOption {
+	return func(d *Decoder) error {
+		if cm == nil {
+			return ErrInvalidCommentMapValue
+		}
+		//d.toCommentMap = cm
 		return nil
 	}
 }
-
-// UseSingleQuote determines if single or double quotes should be preferred for strings.
-func UseSingleQuote(sq bool) EncodeOption {
-	return func(e *Encoder) error {
-		//e.singleQuote = sq
-		return nil
-	}
-}
+*/
