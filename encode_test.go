@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
-	"reflect"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -40,41 +38,8 @@ func TestEncode(t *testing.T) {
 		value   any
 		options func(*Encoder) *Encoder
 	}{
-		//TODO: check nil ref
-		// {
-		// 	"v: \"0001-01-01T00:00:00Z\"\n",
-		// 	map[string]*time.Time{"v": {}},
-		// 	nil,
-		// },
-		// {
-		// 	"v: null\n",
-		// 	map[string]*time.Time{"v": nil},
-		// 	nil,
-		// },
-		// {
-		// 	"v: \"0001-01-01T00:00:00Z\"\n",
-		// 	map[string]any{"v": &time.Time{}},
-		// 	nil,
-		// },
-		// {
-		// 	"v: null\n",
-		// 	map[string]any{"v": (*time.Time)(nil)},
-		// 	nil,
-		// },
-		// {
-		// 	"v: \n- A\n- 1\n- B: \n  - 2\n  - 3\n",
-		// 	map[string]any{
-		// 		"v": []any{ "A", 1 },
-		// 	},
-		// 	nil,
-		// },
-		// {
-		// 	"v: true\n",
-		// 	map[string]interface{}{"v": true},
-		// 	nil,
-		// },
 		{
-			"a: \n  y: \"\"\n",
+			"a:\n  y: \"\"\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitempty"`
@@ -86,6 +51,19 @@ func TestEncode(t *testing.T) {
 			}{}},
 			nil,
 		},
+		// {
+		// 	"a:\n  {}\n",
+		// 	struct {
+		// 		A *struct {
+		// 			X string `yaml:"x,omitempty"`
+		// 			Y string `yaml:"y,omitempty"`
+		// 		}
+		// 	}{&struct {
+		// 		X string `yaml:"x,omitempty"`
+		// 		Y string `yaml:"y,omitempty"`
+		// 	}{}},
+		// 	nil,
+		// },
 	}
 
 	for _, test := range tests {
@@ -103,20 +81,6 @@ func TestEncode(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMy(t *testing.T) {
-	tnil := (*time.Time)(nil)
-	v := reflect.ValueOf(tnil)
-
-	// t2 := reflect.TypeOf(tnil)
-	// _, ok := v.Interface().(time.Time)
-	t2 := v.Type()
-	if t2.Kind() == reflect.Pointer {
-		t2 = t2.Elem()
-	}
-
-	fmt.Println(t2, t2.Name(), t2.Kind(), t2 == reflect.TypeFor[time.Time]())
 }
 
 func TestEncodeTable(t *testing.T) {
@@ -168,6 +132,16 @@ func TestEncodeTable(t *testing.T) {
 		{
 			"v: 4294967296\n",
 			map[string]int64{"v": int64(4294967296)},
+			nil,
+		},
+		{
+			"v: 4444444444\n",
+			map[string]uint64{"v": uint64(4444444444)},
+			nil,
+		},
+		{
+			"3333\n",
+			uint64(3333),
 			nil,
 		},
 		{
@@ -246,22 +220,22 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"v: \n- A\n- B\n",
+			"v:\n- A\n- B\n",
 			map[string][]string{"v": {"A", "B"}},
 			nil,
 		},
 		{
-			"v: \n  - A\n  - B\n",
+			"v:\n  - A\n  - B\n",
 			map[string][]string{"v": {"A", "B"}},
 			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
 		{
-			"v: \n- A\n- B\n",
+			"v:\n- A\n- B\n",
 			map[string][2]string{"v": {"A", "B"}},
 			nil,
 		},
 		{
-			"v: \n  - A\n  - B\n",
+			"v:\n  - A\n  - B\n",
 			map[string][2]string{"v": {"A", "B"}},
 			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
@@ -316,7 +290,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"hello: \n  hello: |\n    hello\n    world\n",
+			"hello:\n  hello: |\n    hello\n    world\n",
 			map[string]map[string]string{"hello": {"hello": "hello\nworld\n"}},
 			nil,
 		},
@@ -346,7 +320,7 @@ func TestEncodeTable(t *testing.T) {
 			func(e *Encoder) *Encoder { return e.WithLiteralMultilineStyle(false) },
 		},
 		{
-			"v: \n- A\n- 1\n- B: \n  - 2\n  - 3\n",
+			"v:\n- A\n- 1\n- B:\n  - 2\n  - 3\n",
 			map[string]any{
 				"v": []any{
 					"A",
@@ -359,7 +333,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"v: \n  - A\n  - 1\n  - B: \n      - 2\n      - 3\n  - 2\n",
+			"v:\n  - A\n  - 1\n  - B:\n      - 2\n      - 3\n  - 2\n",
 			map[string]interface{}{
 				"v": []interface{}{
 					"A",
@@ -373,7 +347,7 @@ func TestEncodeTable(t *testing.T) {
 			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
 		{
-			"a: \n  b: c\n",
+			"a:\n  b: c\n",
 			map[string]interface{}{
 				"a": map[string]string{
 					"b": "c",
@@ -390,7 +364,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \n  b: c\n  d: e\n",
+			"a:\n  b: c\n  d: e\n",
 			map[string]interface{}{
 				"a": map[string]string{
 					"b": "c",
@@ -464,7 +438,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: 1\nb: 2\nc: 3\nd: 4\nsub: \n  e: 5\n",
+			"a: 1\nb: 2\nc: 3\nd: 4\nsub:\n  e: 5\n",
 			map[string]interface{}{
 				"a": 1,
 				"b": 2,
@@ -588,7 +562,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \n  y: \"\"\n",
+			"a:\n  y: \"\"\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitempty"`
@@ -601,7 +575,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \n  {}\n",
+			"a:\n  {}\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitempty"`
@@ -695,7 +669,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \n  y: \"\"\n",
+			"a:\n  y: \"\"\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitzero"`
@@ -708,7 +682,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \n  {}\n",
+			"a:\n  {}\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitzero"`
@@ -894,7 +868,7 @@ func TestEncodeTable(t *testing.T) {
 		},
 		// No quoting in non-flow mode
 		{
-			"a: \n- b\n- c,d\n- e\n",
+			"a:\n- b\n- c,d\n- e\n",
 			struct {
 				A []string `yaml:"a"`
 			}{[]string{"b", "c,d", "e"}},
@@ -1013,7 +987,7 @@ func TestEncodeStructIncludeMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "a: \n  m: \n    x: \"y\"\n"
+	expect := "a:\n  m:\n    x: \"y\"\n"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1030,7 +1004,7 @@ func TestEncodeSliceOfStructs(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"a: \n- x: xx\n  y: yy\n- x: xxx\n  y: yyy\n",
+			"a:\n- x: xx\n  y: yy\n- x: xxx\n  y: yyy\n",
 			struct {
 				A []B `yaml:"a"`
 			}{[]B{
@@ -1075,7 +1049,7 @@ func TestEncodeSliceOfMaps(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"a: \n- x: xx\n  y: yy\n- x: xxx\n  y: yyy\n",
+			"a:\n- x: xx\n  y: yy\n- x: xxx\n  y: yyy\n",
 			struct {
 				A []map[string]string `yaml:"a"`
 			}{[]map[string]string{
@@ -1124,7 +1098,7 @@ func TestEncodeDefinedTypeKeyMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "m: \n  x: \"y\"\n"
+	expect := "m:\n  x: \"y\"\n"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1537,7 +1511,7 @@ line3`},
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := bytes.Buffer{}
-			enc := NewEncoder(&buf).WithIndent(strings.Repeat(" ", tt.indent))
+			enc := NewEncoder(&buf).WithIndent(tt.indent)
 			err := enc.Encode(tt.input)
 			if err != nil {
 				t.Fatalf("failed to marshal yaml: %v", err)

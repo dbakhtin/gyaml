@@ -325,7 +325,7 @@ func (e *encodeState) marshal(v any, opts encoderOptions) (err error) {
 			}
 		}
 	}()
-	e.reflectValue(reflect.ValueOf(v), opts)
+	e.reflectValue(reflect.ValueOf(v), opts, 0)
 	return nil
 }
 
@@ -349,11 +349,20 @@ func isEmptyValue(v reflect.Value) bool {
 	return false
 }
 
-func (e *encodeState) reflectValue(v reflect.Value, opts encoderOptions) {
-	valueEncoder(v)(e, v, opts)
+func (e *encodeState) reflectValue(v reflect.Value, opts encoderOptions, ns nestedState) {
+	valueEncoder(v)(e, v, opts, ns)
 }
 
-type encoderFunc func(e *encodeState, v reflect.Value, opts encoderOptions)
+// nestedState keeps a bitmap for the parent type: struct, map or slice/array
+type nestedState int
+
+const (
+	inSlice nestedState = 2 << iota
+	inStruct
+	inMap
+)
+
+type encoderFunc func(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState)
 
 var encoderCache sync.Map // map[reflect.Type]encoderFunc
 
@@ -378,8 +387,8 @@ func typeEncoder(t reflect.Type) encoderFunc {
 	indirect := sync.OnceValue(func() encoderFunc {
 		return newTypeEncoder(t, true)
 	})
-	fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(func(e *encodeState, v reflect.Value, opts encoderOptions) {
-		indirect()(e, v, opts)
+	fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(func(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+		indirect()(e, v, opts, ns)
 	}))
 	if loaded {
 		return fi.(encoderFunc)
@@ -443,11 +452,11 @@ func newTypeEncoder(t reflect.Type, allowAddr bool) encoderFunc {
 	}
 }
 
-func invalidValueEncoder(e *encodeState, v reflect.Value, _ encoderOptions) {
+func invalidValueEncoder(e *encodeState, v reflect.Value, _ encoderOptions, ns nestedState) {
 	e.WriteString("null")
 }
 
-func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
 		e.WriteString("null")
 		return
@@ -466,7 +475,7 @@ func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
 	}
 }
 
-func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
 		e.WriteString("null")
@@ -482,7 +491,7 @@ func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) 
 	}
 }
 
-func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
 		e.WriteString("null")
 		return
@@ -506,7 +515,7 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) 
 	e.Write(b)
 }
 
-func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
 		e.WriteString("null")
@@ -520,46 +529,97 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptio
 	e.Write(b)
 }
 
-func boolEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
-	b := e.AvailableBuffer()
+// TODO: remove opts & use only level + indentNum - or use a stripped options type
+func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState) []byte {
+	if isScalar {
+		if ns&inSlice != 0 {
+			if opts.isFlowStyle {
+				return dst
+			}
+			//just add one indent? xD
+			if opts.indentSequence {
+				// opts.level++
+			}
+			dst = append(dst, '\n')
+			//opts.level should always be > 0, indentNum > 1
+			indent := bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
+			indent[len(indent)-2] = '-'
+			return append(dst, indent...)
+		}
+		if ns != 0 {
+			return append(dst, ' ')
+		}
+	} else {
+		if ns != 0 {
+			dst = append(dst, '\n')
+			//opts.level should always be > 0, indentNum > 1
+			indent := bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
+			if ns&inSlice != 0 {
+				indent[len(indent)-2] = '-'
+			}
+			return append(dst, indent...)
+		}
+		dst = append(dst, '\n')
+	}
+	return dst
+}
+
+func appendString(dst []byte, str string) []byte {
+	return append(dst, []byte(str)...)
+}
+
+func boolEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 	b = strconv.AppendBool(b, v.Bool())
 	e.Write(b)
 }
 
-func intEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func intEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.CanInterface() {
 		if t, ok := v.Interface().(time.Duration); ok {
-			stringEncoderSimple(e, t.String(), opts)
+			encodeDuration(e, t, opts, ns)
 			return
 		}
 	}
-	b := e.AvailableBuffer()
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 	b = strconv.AppendInt(b, v.Int(), 10)
 	e.Write(b)
 }
 
-func uintEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
-	b := e.AvailableBuffer()
+func encodeDuration(e *encodeState, d time.Duration, opts encoderOptions, ns nestedState) {
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	var value []byte
+	if opts.isJSONStyle {
+		value = []byte(quoteString(e, d.String(), opts))
+	} else {
+		value = []byte(d.String())
+	}
+	b = append(b, value...)
+	e.Write(b)
+}
+
+func uintEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 	b = strconv.AppendUint(b, v.Uint(), 10)
 	e.Write(b)
 }
 
 type floatEncoder int // number of bits
 
-func (bits floatEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
+func (bits floatEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	f := v.Float()
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 	if f == math.Inf(0) {
-		e.WriteString(".inf")
+		e.Write(appendString(b, ".inf"))
 		return
 	} else if f == math.Inf(-1) {
-		e.WriteString("-.inf")
+		e.Write(appendString(b, "-.inf"))
 		return
 	} else if math.IsNaN(f) {
-		e.WriteString(".nan")
+		e.Write(appendString(b, ".nan"))
 		return
 	}
 
-	b := e.AvailableBuffer()
 	b = strconv.AppendFloat(b, f, byte('g'), -1, int(bits))
 	if !bytes.Contains(b, []byte{'e'}) && !bytes.Contains(b, []byte{'.'}) && !opts.autoInt {
 		// append x.0 suffix to keep float value context
@@ -599,41 +659,35 @@ func isNeedQuoted(value string, opts encoderOptions) bool {
 	return token.IsNeedQuoted(value)
 }
 
-func calcIndent(opts encoderOptions, printDash bool) []byte {
+func calcIndent(opts encoderOptions, printDash bool, ns nestedState) []byte {
 	var indent []byte
 	if opts.isFlowStyle {
 		return indent
 	}
-	indent = bytes.Repeat([]byte{' '}, opts.level*len(opts.indentValue))
+	indent = bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
 	if printDash && len(indent) > 1 {
 		indent[len(indent)-2] = '-'
 	}
 	return indent
 }
 
-func quoteString(e *encodeState, s string, opts encoderOptions) string {
+func quoteString(_ *encodeState, s string, opts encoderOptions) string {
 	if opts.singleQuote {
 		return quoteWith(s, '\'')
 	}
 	return strconv.Quote(s)
 }
 
-func stringEncoderSimple(e *encodeState, s string, opts encoderOptions) {
-	if isReserved(s) || isNeedQuoted(s, opts) {
-		e.WriteString(quoteString(e, s, opts))
-		return
-	}
-	e.WriteString(s)
-}
-
-func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	s := v.String()
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 
 	if isReserved(s) || isNeedQuoted(s, opts) {
-		e.WriteString(quoteString(e, s, opts))
+		e.Write(appendString(b, quoteString(e, s, opts)))
 		return
 	}
 
+	//TODO: rewrite with []byte??
 	lbc := token.DetectLineBreakCharacter(s)
 	if strings.Contains(s, lbc) {
 		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
@@ -642,33 +696,159 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
 		if !opts.inSlice {
 			opts.level++
 		}
-		indent := strings.Repeat(opts.indentValue, opts.level)
+		indent := strings.Repeat(" ", opts.level*opts.indentNum)
 		values := []string{}
 		for _, v := range strings.Split(s, lbc) {
 			values = append(values, fmt.Sprintf("%s%s", indent, v))
 		}
 		block := strings.TrimSuffix(strings.TrimSuffix(strings.Join(values, lbc), fmt.Sprintf("%s%s", lbc, indent)), indent)
-		e.WriteString(header)
-		e.WriteString(lbc)
-		e.WriteString(block)
+		b = appendString(b, header)
+		b = appendString(b, lbc)
+		b = appendString(b, block)
+		e.Write(b)
 		return
 	} else if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
-		e.WriteString(quoteWith(s, '\''))
+		e.Write(appendString(b, quoteWith(s, '\'')))
 		return
 	}
-	e.WriteString(s)
+	e.Write(appendString(b, s))
 }
 
-func interfaceEncoder(e *encodeState, v reflect.Value, opts encoderOptions) {
+func interfaceEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
-	e.reflectValue(v.Elem(), opts)
+	e.reflectValue(v.Elem(), opts, ns)
 }
 
-func unsupportedTypeEncoder(e *encodeState, v reflect.Value, _ encoderOptions) {
+func unsupportedTypeEncoder(e *encodeState, v reflect.Value, _ encoderOptions, _ nestedState) {
 	e.error(&UnsupportedTypeError{v.Type()})
+}
+
+type mapEncoder struct {
+	elemEnc encoderFunc
+}
+
+func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	if ns != 0 && ns != inSlice {
+		opts.level++
+	}
+	if v.IsNil() {
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
+		return
+	}
+	if v.Len() == 0 {
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "{}"))
+		return
+	}
+	if e.ptrLevel++; e.ptrLevel > startDetectingCyclesAfter {
+		// We're a large number of nested ptrEncoder.encode calls deep;
+		// start checking if we've run into a pointer cycle.
+		ptr := v.UnsafePointer()
+		if _, ok := e.ptrSeen[ptr]; ok {
+			e.error(&UnsupportedValueError{v, fmt.Sprintf("encountered a cycle via %s", v.Type())})
+		}
+		e.ptrSeen[ptr] = struct{}{}
+		defer delete(e.ptrSeen, ptr)
+	}
+
+	if opts.isFlowStyle {
+		e.WriteByte('{')
+	}
+
+	// Extract and sort the keys.
+	var (
+		sv  = make([]reflectWithString, v.Len())
+		mi  = v.MapRange()
+		err error
+	)
+	for i := 0; mi.Next(); i++ {
+		if sv[i].ks, err = resolveKeyName(mi.Key()); err != nil {
+			e.error(fmt.Errorf("yaml: encoding error for type %q: %q", v.Type().String(), err.Error()))
+		}
+		sv[i].v = mi.Value()
+	}
+	slices.SortFunc(sv, func(i, j reflectWithString) int {
+		return strings.Compare(i.ks, j.ks)
+	})
+
+	for i, kv := range sv {
+		b := appendIndent(e.AvailableBuffer(), opts.isFlowStyle, opts, ns)
+		if i > 0 {
+			if opts.isFlowStyle {
+				//b = append(b, ',', ' ')
+				b = append(b, ',') //+++
+			} else {
+				// b = append(b, '\n')
+			}
+		}
+
+		if opts.isJSONStyle {
+			kv.ks = quoteString(e, kv.ks, opts)
+		}
+		b = appendString(b, kv.ks)
+
+		//TODO: remove
+		// isSliceValue := valueIsSlice(kv.v)
+		// isMapValue := valueIsMap(kv.v)
+		// isStructValue := valueIsStruct(kv.v)
+
+		//TODO: move level out of opts and pass as argument to encoders by value?
+		// level := opts.level
+		//TODO: remove
+		// if isSliceValue || isMapValue || isStructValue {
+		// 	opts.level++
+		// }
+		//TODO: remove space after :
+		// b = append(b, ':', ' ')
+		b = append(b, ':')
+		//TODO: remove
+		// if (isMapValue || isStructValue || isSliceValue) && !opts.isFlowStyle {
+		//b = append(b, '\n')
+		// }
+		e.Write(b)
+		me.elemEnc(e, kv.v, opts, inMap)
+		// opts.level = level
+	}
+	if opts.isFlowStyle {
+		e.WriteByte('}')
+	}
+
+	e.ptrLevel--
+}
+
+// TODO: can optimize this?
+func valueIsSlice(v reflect.Value) bool {
+
+	// t := v.Type()
+	// check := t.Kind() == reflect.Slice
+	// _ = check
+	// if t.Kind() == reflect.Pointer {
+	// 	t = t.Elem()
+	// }
+	// return t.Kind() == reflect.Slice || t.Kind() == reflect.Array
+	vcanInterface := v.CanInterface() && reflect.TypeOf(v.Interface()) != nil
+	return (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) ||
+		vcanInterface && (reflect.TypeOf(v.Interface()).Kind() == reflect.Slice || reflect.TypeOf(v.Interface()).Kind() == reflect.Array)
+}
+
+func newMapEncoder(t reflect.Type) encoderFunc {
+	switch t.Key().Kind() {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Bool:
+	default:
+		if !t.Key().Implements(textMarshalerType) {
+			return unsupportedTypeEncoder
+		}
+	}
+	me := mapEncoder{typeEncoder(t.Elem())}
+	return me.encode
 }
 
 type structEncoder struct {
@@ -681,7 +861,7 @@ type structFields struct {
 	byFoldedName map[string]*field
 }
 
-func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
+func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	next := []byte{} //field separator
 	if opts.isFlowStyle {
 		e.WriteByte('{')
@@ -733,8 +913,7 @@ FieldLoop:
 			}
 		}
 
-		b := e.AvailableBuffer()
-		b = append(b, next...)
+		b := append(e.AvailableBuffer(), next...)
 		if opts.isFlowStyle {
 			next = []byte{',', ' '}
 		} else {
@@ -747,7 +926,11 @@ FieldLoop:
 		//dont propagate further
 		fOpts.inSlice = false
 
-		indent := calcIndent(opts, isFirstField && opts.inSlice)
+		indent := calcIndent(opts, isFirstField && opts.inSlice, ns)
+		//TODO: need a flag for arrays/dash ^
+		//TODO: can't decide isScalar value for element or it should depend on
+		//parent's type (false here)
+		// appendIndent(b, )
 		isFirstField = false
 		b = append(b, indent...)
 
@@ -814,16 +997,16 @@ FieldLoop:
 				fOpts.level++
 			}
 			e.Write(b)
-			f.encoder(e, fv, fOpts)
+			f.encoder(e, fv, fOpts, ns)
 			continue
 		}
 		e.Write(b)
-		f.encoder(e, fv, fOpts)
+		f.encoder(e, fv, fOpts, ns)
 
 	}
 	//if no fields printed
 	if len(next) == 0 && !opts.isFlowStyle {
-		indent := strings.Repeat(opts.indentValue, opts.level)
+		indent := strings.Repeat(" ", opts.level*opts.indentNum)
 		e.WriteString(indent + "{}")
 	} else if opts.isFlowStyle {
 		e.WriteByte('}')
@@ -835,226 +1018,62 @@ func newStructEncoder(t reflect.Type) encoderFunc {
 	return se.encode
 }
 
-type mapEncoder struct {
-	elemEnc encoderFunc
-}
-
-func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
-	if v.IsNil() {
-		e.WriteString("null")
-		return
-	}
-	if v.Len() == 0 {
-		e.WriteString("{}")
-		return
-	}
-	if e.ptrLevel++; e.ptrLevel > startDetectingCyclesAfter {
-		// We're a large number of nested ptrEncoder.encode calls deep;
-		// start checking if we've run into a pointer cycle.
-		ptr := v.UnsafePointer()
-		if _, ok := e.ptrSeen[ptr]; ok {
-			e.error(&UnsupportedValueError{v, fmt.Sprintf("encountered a cycle via %s", v.Type())})
-		}
-		e.ptrSeen[ptr] = struct{}{}
-		defer delete(e.ptrSeen, ptr)
-	}
-
-	if opts.isFlowStyle {
-		e.WriteByte('{')
-	}
-
-	// Extract and sort the keys.
-	var (
-		sv  = make([]reflectWithString, v.Len())
-		mi  = v.MapRange()
-		err error
-	)
-	for i := 0; mi.Next(); i++ {
-		if sv[i].ks, err = resolveKeyName(mi.Key()); err != nil {
-			e.error(fmt.Errorf("yaml: encoding error for type %q: %q", v.Type().String(), err.Error()))
-		}
-		sv[i].v = mi.Value()
-	}
-	slices.SortFunc(sv, func(i, j reflectWithString) int {
-		return strings.Compare(i.ks, j.ks)
-	})
-
-	for i, kv := range sv {
-		indent := calcIndent(opts, opts.inSlice && i == 0)
-		b := e.AvailableBuffer()
-		if i > 0 {
-			if opts.isFlowStyle {
-				b = append(b, ',', ' ')
-			} else {
-				b = append(b, '\n')
-			}
-		}
-
-		b = append(b, indent...)
-		if opts.isJSONStyle {
-			kv.ks = quoteString(e, kv.ks, opts)
-		}
-		b = append(b, []byte(kv.ks)...)
-
-		//TODO: need state machine xD
-		isSliceValue := valueIsSlice(kv.v)
-		isMapValue := valueIsMap(kv.v)
-		isStructValue := valueIsStruct(kv.v)
-
-		//TODO: move level out of opts and pass as argument to encoders by value?
-		level := opts.level
-		if isSliceValue || isMapValue || isStructValue {
-			opts.level++
-		}
-		//TODO: remove space after :
-		b = append(b, ':', ' ')
-		if (isMapValue || isStructValue || isSliceValue) && !opts.isFlowStyle {
-			b = append(b, '\n')
-		}
-		e.Write(b)
-		me.elemEnc(e, kv.v, opts)
-		opts.level = level
-	}
-	if opts.isFlowStyle {
-		e.WriteByte('}')
-	}
-
-	e.ptrLevel--
-}
-
-func valueIsScalar(v reflect.Value) bool {
-	kind := v.Kind()
-	for kind == reflect.Interface {
-		if v.IsNil() {
-			return true
-		}
-		v = v.Elem()
-		kind = v.Kind()
-	}
-	switch kind {
-	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64,
-		reflect.String:
-		return true
-	default:
-		return false
-	}
-}
-
-// TODO: can optimize this?
-func valueIsMap(v reflect.Value) bool {
-	vcanInterface := v.CanInterface() && reflect.TypeOf(v.Interface()) != nil
-	return v.Kind() == reflect.Map || vcanInterface && reflect.TypeOf(v.Interface()).Kind() == reflect.Map
-}
-
-// TODO: can optimize this?
-func valueIsSlice(v reflect.Value) bool {
-
-	// t := v.Type()
-	// check := t.Kind() == reflect.Slice
-	// _ = check
-	// if t.Kind() == reflect.Pointer {
-	// 	t = t.Elem()
-	// }
-	// return t.Kind() == reflect.Slice || t.Kind() == reflect.Array
-	vcanInterface := v.CanInterface() && reflect.TypeOf(v.Interface()) != nil
-	return (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) ||
-		vcanInterface && (reflect.TypeOf(v.Interface()).Kind() == reflect.Slice || reflect.TypeOf(v.Interface()).Kind() == reflect.Array)
-}
-
-func valueIsStruct(v reflect.Value) bool {
-	// if v.Kind() == reflect.Interface {
-	// 	if v.IsNil() {
-	// 		return false
-	// 	}
-	// 	v = v.Elem()
-	// }
-	// t := v.Type()
-	// if t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface  {
-	// 	// v = v.Elem()
-	// 	// _ = v
-	// 	t = t.Elem()
-	// }
-	// if t == reflect.TypeFor[time.Time]() {
-	// 	return false
-	// }
-	vcanInterface := v.CanInterface() && reflect.TypeOf(v.Interface()) != nil
-	if vcanInterface {
-		if _, ok := v.Interface().(time.Time); ok {
-			return false
-		}
-	}
-	return v.Kind() == reflect.Struct ||
-		vcanInterface && reflect.TypeOf(v.Interface()).Kind() == reflect.Struct
-}
-
-func newMapEncoder(t reflect.Type) encoderFunc {
-	switch t.Key().Kind() {
-	case reflect.String,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64, reflect.Bool:
-	default:
-		if !t.Key().Implements(textMarshalerType) {
-			return unsupportedTypeEncoder
-		}
-	}
-	me := mapEncoder{typeEncoder(t.Elem())}
-	return me.encode
-}
-
 type arrayEncoder struct {
 	elemEnc encoderFunc
 }
 
-func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
+func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	if ns != 0 || opts.level == 0 && !opts.isFlowStyle {
+		opts.level++
+		//just add one more indent? or check if ns&inMap != 0 || ns&inStruct != 0
+		if opts.indentSequence {
+			opts.level++
+		}
+	}
 	n := v.Len()
+	b := appendIndent(e.AvailableBuffer(), opts.isFlowStyle || n == 0, opts, ns)
 	if n == 0 {
-		e.WriteString("[]")
+		e.Write(append(b, '[', ']'))
 		return
 	}
 
 	if opts.isFlowStyle {
-		e.WriteByte('[')
-		n := v.Len()
+		e.Write(append(b, '['))
 		for i := range n {
 			if i > 0 {
 				e.Write([]byte{',', ' '})
 			}
-			ae.elemEnc(e, v.Index(i), opts)
+			ae.elemEnc(e, v.Index(i), opts, inSlice)
 		}
 		e.WriteByte(']')
 		return
 	}
 
-	if opts.indentSequence {
-		//one more indent
-		opts.level++
-	}
+	//TODO: remove!!!
 	opts.inSlice = true
 
 	for i := range n {
 		b := e.AvailableBuffer()
-		if i > 0 {
-			b = append(b, '\n')
+		if ns > 0 {
+			// b = append(b, '\n')
 		}
 		value := v.Index(i)
 		//do not increase indent for scalar values or maps
-		isScalar := valueIsScalar(value)
-		isMap := valueIsMap(value)
-		shouldIncIndent := !isScalar && !isMap
-		origLevel := opts.level
+		// isScalar := valueIsScalar(value)
+		// isMap := valueIsMap(value)
+		// shouldIncIndent := !isScalar && !isMap
+		// origLevel := opts.level
 		//TODO: move this flag to bitmap opts, so I can set it locally per encode call
-		if shouldIncIndent || opts.level == 0 {
-			opts.level++
+		// if shouldIncIndent || opts.level == 0 {
+		if opts.level == 0 {
+			// opts.level++
 		}
-		if isScalar {
-			b = append(b, calcIndent(opts, true)...)
-		}
+		// if isScalar {
+		// 	b = append(b, calcIndent(opts, true, ns)...)
+		// }
 		e.Write(b)
-		ae.elemEnc(e, value, opts)
-		opts.level = origLevel
+		ae.elemEnc(e, value, opts, inSlice)
+		// opts.level = origLevel
 	}
 
 }
@@ -1068,9 +1087,10 @@ type ptrEncoder struct {
 	elemEnc encoderFunc
 }
 
-func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
+func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
 	if e.ptrLevel++; e.ptrLevel > startDetectingCyclesAfter {
@@ -1083,7 +1103,7 @@ func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		e.ptrSeen[ptr] = struct{}{}
 		defer delete(e.ptrSeen, ptr)
 	}
-	pe.elemEnc(e, v.Elem(), opts)
+	pe.elemEnc(e, v.Elem(), opts, ns)
 	e.ptrLevel--
 }
 
@@ -1096,11 +1116,11 @@ type condAddrEncoder struct {
 	canAddrEnc, elseEnc encoderFunc
 }
 
-func (ce condAddrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions) {
+func (ce condAddrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.CanAddr() {
-		ce.canAddrEnc(e, v, opts)
+		ce.canAddrEnc(e, v, opts, ns)
 	} else {
-		ce.elseEnc(e, v, opts)
+		ce.elseEnc(e, v, opts, ns)
 	}
 }
 

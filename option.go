@@ -21,8 +21,8 @@ type encoderOptions struct {
 	commentMap                 map[*Path][]*Comment
 	indentSequence             bool
 
-	//TODO: switch to indentSize int
-	indentValue string
+	//default indent size in spaces
+	indentNum int
 
 	//local options
 	level   int
@@ -31,7 +31,7 @@ type encoderOptions struct {
 
 func defaultEncoderOptions() encoderOptions {
 	return encoderOptions{
-		indentValue: "  ",
+		indentNum: 2,
 		//enableSmartAnchor: true,
 		anchors:     make(map[uintptr]string),
 		anchorNames: make(map[string]uintptr),

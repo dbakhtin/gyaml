@@ -7,6 +7,7 @@
 package gyaml
 
 import (
+	"errors"
 	"io"
 )
 
@@ -92,8 +93,11 @@ func (e *Encoder) WithLiteralMultilineStyle(yes bool) *Encoder {
 }
 
 // WithIndent changes default indent
-func (e *Encoder) WithIndent(indent string) *Encoder {
-	e.options.indentValue = indent
+func (e *Encoder) WithIndent(size int) *Encoder {
+	if size < 2 {
+		e.err = errors.New("wrong indent size option")
+	}
+	e.options.indentNum = size
 	return e
 }
 
@@ -130,9 +134,6 @@ func (enc *Encoder) Encode(v any) error {
 		return err
 	}
 
-	//MY: encode creates (or pulls from pool) an encodeState for each value v
-	//marshals it and writes to writer
-
 	//TODO: indent is a crucial part of yaml format, so move indents to e.marshal
 
 	// Terminate each value with a newline.
@@ -152,6 +153,9 @@ func (enc *Encoder) Encode(v any) error {
 	}
 
 	b := e.Bytes()
+	if len(b) != 0 && b[0] == '\n' {
+		b = b[1:]
+	}
 	if _, err = enc.w.Write(b); err != nil {
 		enc.err = err
 	}
