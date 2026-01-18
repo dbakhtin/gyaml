@@ -211,9 +211,12 @@ func Marshal(v any) ([]byte, error) {
 	}
 	e.WriteByte('\n')
 
-	buf := append([]byte(nil), e.Bytes()...)
+	b := append([]byte(nil), e.Bytes()...)
+	if len(b) != 0 && b[0] == '\n' {
+		b = b[1:]
+	}
 
-	return buf, nil
+	return b, nil
 }
 
 // Marshaler is the interface implemented by types that
@@ -452,23 +455,27 @@ func newTypeEncoder(t reflect.Type, allowAddr bool) encoderFunc {
 	}
 }
 
-func invalidValueEncoder(e *encodeState, v reflect.Value, _ encoderOptions, ns nestedState) {
-	e.WriteString("null")
+func invalidValueEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	e.Write(appendString(b, "null"))
 }
 
 func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
 	m, ok := v.Interface().(Marshaler)
 	if !ok {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
-	b, err := m.MarshalYAML()
+	my, err := m.MarshalYAML()
 	if err == nil {
-		e.Buffer.Write(b)
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(append(b, my...))
 	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalYAML"})
@@ -478,13 +485,15 @@ func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns n
 func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
 	m := va.Interface().(Marshaler)
-	b, err := m.MarshalYAML()
+	my, err := m.MarshalYAML()
 	if err == nil {
-		e.Buffer.Write(b)
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(append(b, my...))
 	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalYAML"})
@@ -493,26 +502,27 @@ func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, 
 
 func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
 	m, ok := v.Interface().(encoding.TextMarshaler)
 	if !ok {
-		e.WriteString("null")
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
-	b, err := m.MarshalText()
+	mt, err := m.MarshalText()
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalText"})
 	}
-	s := string(b)
+	s := string(mt)
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 	if isReserved(s) || token.IsNeedQuoted(s) {
-		b := e.AvailableBuffer()
-		b = strconv.AppendQuote(b, s)
-		e.Write(b)
+		e.Write(strconv.AppendQuote(b, s))
 		return
 	}
-	e.Write(b)
+	e.Write(append(b, mt...))
 }
 
 func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
@@ -530,6 +540,7 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptio
 }
 
 // TODO: remove opts & use only level + indentNum - or use a stripped options type
+// TODO: remove isScalar, it intersects with opts.isFlowStyle
 func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState) []byte {
 	if isScalar {
 		if ns&inSlice != 0 {
@@ -659,18 +670,6 @@ func isNeedQuoted(value string, opts encoderOptions) bool {
 	return token.IsNeedQuoted(value)
 }
 
-func calcIndent(opts encoderOptions, printDash bool, ns nestedState) []byte {
-	var indent []byte
-	if opts.isFlowStyle {
-		return indent
-	}
-	indent = bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
-	if printDash && len(indent) > 1 {
-		indent[len(indent)-2] = '-'
-	}
-	return indent
-}
-
 func quoteString(_ *encodeState, s string, opts encoderOptions) string {
 	if opts.singleQuote {
 		return quoteWith(s, '\'')
@@ -693,7 +692,7 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
 		// It works mostly, but inconsistencies occur if line break characters are mixed.
 		header := token.LiteralBlockHeader(s)
-		if !opts.inSlice {
+		if ns&inSlice == 0 {
 			opts.level++
 		}
 		indent := strings.Repeat(" ", opts.level*opts.indentNum)
@@ -704,8 +703,7 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		block := strings.TrimSuffix(strings.TrimSuffix(strings.Join(values, lbc), fmt.Sprintf("%s%s", lbc, indent)), indent)
 		b = appendString(b, header)
 		b = appendString(b, lbc)
-		b = appendString(b, block)
-		e.Write(b)
+		e.Write(appendString(b, block))
 		return
 	} else if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
 		e.Write(appendString(b, quoteWith(s, '\'')))
@@ -757,7 +755,8 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 	}
 
 	if opts.isFlowStyle {
-		e.WriteByte('{')
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(append(b, '{'))
 	}
 
 	// Extract and sort the keys.
@@ -777,14 +776,19 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 	})
 
 	for i, kv := range sv {
-		b := appendIndent(e.AvailableBuffer(), opts.isFlowStyle, opts, ns)
-		if i > 0 {
-			if opts.isFlowStyle {
-				//b = append(b, ',', ' ')
-				b = append(b, ',') //+++
-			} else {
-				// b = append(b, '\n')
+		b := e.AvailableBuffer()
+
+		if opts.isFlowStyle {
+			if i > 0 {
+				b = append(b, ',', ' ')
 			}
+		} else {
+			if i > 0 && ns&inSlice != 0 {
+				//remove inSlice bit so it does not print '-'
+				//add inStruct bit to preserve indent size
+				ns = ns&^inSlice | inStruct
+			}
+			b = appendIndent(b, false, opts, ns)
 		}
 
 		if opts.isJSONStyle {
@@ -792,48 +796,15 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		}
 		b = appendString(b, kv.ks)
 
-		//TODO: remove
-		// isSliceValue := valueIsSlice(kv.v)
-		// isMapValue := valueIsMap(kv.v)
-		// isStructValue := valueIsStruct(kv.v)
-
-		//TODO: move level out of opts and pass as argument to encoders by value?
-		// level := opts.level
-		//TODO: remove
-		// if isSliceValue || isMapValue || isStructValue {
-		// 	opts.level++
-		// }
-		//TODO: remove space after :
-		// b = append(b, ':', ' ')
 		b = append(b, ':')
-		//TODO: remove
-		// if (isMapValue || isStructValue || isSliceValue) && !opts.isFlowStyle {
-		//b = append(b, '\n')
-		// }
 		e.Write(b)
 		me.elemEnc(e, kv.v, opts, inMap)
-		// opts.level = level
 	}
 	if opts.isFlowStyle {
 		e.WriteByte('}')
 	}
 
 	e.ptrLevel--
-}
-
-// TODO: can optimize this?
-func valueIsSlice(v reflect.Value) bool {
-
-	// t := v.Type()
-	// check := t.Kind() == reflect.Slice
-	// _ = check
-	// if t.Kind() == reflect.Pointer {
-	// 	t = t.Elem()
-	// }
-	// return t.Kind() == reflect.Slice || t.Kind() == reflect.Array
-	vcanInterface := v.CanInterface() && reflect.TypeOf(v.Interface()) != nil
-	return (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) ||
-		vcanInterface && (reflect.TypeOf(v.Interface()).Kind() == reflect.Slice || reflect.TypeOf(v.Interface()).Kind() == reflect.Array)
 }
 
 func newMapEncoder(t reflect.Type) encoderFunc {
@@ -862,9 +833,13 @@ type structFields struct {
 }
 
 func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	if ns != 0 && ns != inSlice {
+		opts.level++
+	}
 	next := []byte{} //field separator
 	if opts.isFlowStyle {
-		e.WriteByte('{')
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(append(b, '{'))
 	}
 
 	//check this when printing a slice of structs
@@ -874,6 +849,7 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 	//in this map should be skipped without encoding, because there is an *anchor
 	//for the whole struct
 	anchorsFound := make(map[reflect.Type]struct{})
+	empty := true
 FieldLoop:
 	for i := range se.fields.list {
 		f := &se.fields.list[i]
@@ -916,41 +892,38 @@ FieldLoop:
 		b := append(e.AvailableBuffer(), next...)
 		if opts.isFlowStyle {
 			next = []byte{',', ' '}
-		} else {
-			next = []byte{'\n'}
 		}
+		empty = false
 
 		//derived options
 		fOpts := opts
 		fOpts.isFlowStyle = fOpts.isFlowStyle || f.flow
-		//dont propagate further
-		fOpts.inSlice = false
 
-		indent := calcIndent(opts, isFirstField && opts.inSlice, ns)
-		//TODO: need a flag for arrays/dash ^
-		//TODO: can't decide isScalar value for element or it should depend on
-		//parent's type (false here)
-		// appendIndent(b, )
+		if !opts.isFlowStyle {
+			if !isFirstField && ns&inSlice != 0 {
+				//remove inSlice bit so it does not print '-'
+				//add inStruct bit to preserve indent size
+				ns = ns&^inSlice | inStruct
+			}
+			b = appendIndent(b, false, opts, ns)
+		}
 		isFirstField = false
-		b = append(b, indent...)
-
 		if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
 			if name, ok := opts.anchors[fv.Pointer()]; ok {
 				//anchor found, merge alias
-				b = append(b, []byte{'<', '<', ':', ' ', '*'}...)
-				b = append(b, []byte(name)...)
-				e.Write(b)
+				b = appendString(b, "<<: *")
+				e.Write(appendString(b, name))
 				continue
 			}
 		}
 
 		if opts.isJSONStyle {
 			//quote struct fields
-			b = append(b, []byte(quoteString(e, f.name, opts))...)
+			b = appendString(b, quoteString(e, f.name, opts))
 		} else {
 			b = append(b, f.nameBytes...)
 		}
-		b = append(b, ':', ' ')
+		b = append(b, ':')
 
 		isReference := (fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Map || fv.Kind() == reflect.Slice)
 		if isReference {
@@ -960,8 +933,8 @@ FieldLoop:
 				if f.alias != "" && anch != f.alias {
 					e.error(fmt.Errorf("expected alias name is %q but got %q", f.alias, anch))
 				}
-				b = append(b, '*')
-				b = append(b, []byte(anch)...)
+				b = append(b, ' ', '*')
+				b = appendString(b, anch)
 				if fv.Kind() == reflect.Pointer {
 					anchorsFound[fv.Elem().Type()] = struct{}{}
 				}
@@ -975,39 +948,19 @@ FieldLoop:
 				if anchor == "" {
 					e.error(fmt.Errorf("unexpected empty anchor name for field: %s", f.name))
 				}
-				b = append(b, '&')
-				b = append(b, []byte(anchor)...)
+				b = append(b, ' ', '&')
+				b = appendString(b, anchor)
 			}
 		}
 
-		//TODO: optimize
-		hasNested := fv.Kind() == reflect.Struct ||
-			(fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.Struct) ||
-			(fv.Kind() == reflect.Map && fv.Len() > 0)
-		// hasNested := valueIsStruct(fv) || valueIsMap(fv) && fv.Len() > 0
-
-		if (hasNested || valueIsSlice(fv) && fv.Len() > 0) && !fOpts.isFlowStyle {
-			b = append(b, '\n')
-		}
-
-		//if we have a nested map or struct, break the line & indent
-		if hasNested {
-			//flow style prints maps, slices, structs in one line with comma delimiter, so no need to inc level
-			if !fOpts.isFlowStyle {
-				fOpts.level++
-			}
-			e.Write(b)
-			f.encoder(e, fv, fOpts, ns)
-			continue
-		}
 		e.Write(b)
-		f.encoder(e, fv, fOpts, ns)
+		f.encoder(e, fv, fOpts, inStruct)
 
 	}
 	//if no fields printed
-	if len(next) == 0 && !opts.isFlowStyle {
-		indent := strings.Repeat(" ", opts.level*opts.indentNum)
-		e.WriteString(indent + "{}")
+	if empty && !opts.isFlowStyle {
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		e.Write(append(b, '{', '}'))
 	} else if opts.isFlowStyle {
 		e.WriteByte('}')
 	}
@@ -1049,33 +1002,9 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 		return
 	}
 
-	//TODO: remove!!!
-	opts.inSlice = true
-
 	for i := range n {
-		b := e.AvailableBuffer()
-		if ns > 0 {
-			// b = append(b, '\n')
-		}
-		value := v.Index(i)
-		//do not increase indent for scalar values or maps
-		// isScalar := valueIsScalar(value)
-		// isMap := valueIsMap(value)
-		// shouldIncIndent := !isScalar && !isMap
-		// origLevel := opts.level
-		//TODO: move this flag to bitmap opts, so I can set it locally per encode call
-		// if shouldIncIndent || opts.level == 0 {
-		if opts.level == 0 {
-			// opts.level++
-		}
-		// if isScalar {
-		// 	b = append(b, calcIndent(opts, true, ns)...)
-		// }
-		e.Write(b)
-		ae.elemEnc(e, value, opts, inSlice)
-		// opts.level = origLevel
+		ae.elemEnc(e, v.Index(i), opts, inSlice)
 	}
-
 }
 
 func newArrayEncoder(t reflect.Type) encoderFunc {

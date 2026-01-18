@@ -11,13 +11,15 @@
 * Less gc pressure & memory consumption upto 10 times ymmv, same example
 
 # TODO
+* Test nested structs (>=2 levels)
 * Move linebreak out of appendIndent? to struct/map/array encoders
-* Move valueIsStruct & other checks to params with flag
 * Optimize marked with //TODO: functions & algorithms
 * Optimize options & argument options
 * Commented tests with isEmpty for structs
 * Encode slice of slices & compare with official yaml
 * Check different indentNum options (<2, >2)
+* Check test coverage & update tests (that null checks, etc)
+* Write more tests with various kind of nesting (maps, structs, slices & again)
 
 # Decoder
 * fuzz_test.go

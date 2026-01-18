@@ -9,24 +9,23 @@ type encoderOptions struct {
 	//each time there is an anchor name collision add suffix numbers to anchor name, true by default
 	//enableSmartAnchor bool
 	// anchors & aliases
-	aliasRefToName map[uintptr]string
-	anchors        map[uintptr]string
-	anchorNames    map[string]uintptr
+	// aliasRefToName map[uintptr]string
+	anchors     map[uintptr]string
+	anchorNames map[string]uintptr
 	//anchorCallback             func(*ast.AnchorNode, interface{}) error
 	//customMarshalerMap         map[reflect.Type]func(any) ([]byte, error)
 	omitZero                   bool
 	omitEmpty                  bool
 	autoInt                    bool
 	useLiteralStyleIfMultiline bool
-	commentMap                 map[*Path][]*Comment
-	indentSequence             bool
+	// commentMap                 map[*Path][]*Comment
+	indentSequence bool
 
 	//default indent size in spaces
 	indentNum int
 
 	//local options
-	level   int
-	inSlice bool
+	level int
 }
 
 func defaultEncoderOptions() encoderOptions {

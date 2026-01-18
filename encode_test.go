@@ -39,31 +39,10 @@ func TestEncode(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"a:\n  y: \"\"\n",
-			struct {
-				A *struct {
-					X string `yaml:"x,omitempty"`
-					Y string
-				}
-			}{&struct {
-				X string `yaml:"x,omitempty"`
-				Y string
-			}{}},
+			"v: null\n",
+			map[string]map[string]string{"v": nil},
 			nil,
 		},
-		// {
-		// 	"a:\n  {}\n",
-		// 	struct {
-		// 		A *struct {
-		// 			X string `yaml:"x,omitempty"`
-		// 			Y string `yaml:"y,omitempty"`
-		// 		}
-		// 	}{&struct {
-		// 		X string `yaml:"x,omitempty"`
-		// 		Y string `yaml:"y,omitempty"`
-		// 	}{}},
-		// 	nil,
-		// },
 	}
 
 	for _, test := range tests {
@@ -92,6 +71,11 @@ func TestEncodeTable(t *testing.T) {
 		{
 			"null\n",
 			(*struct{})(nil),
+			nil,
+		},
+		{
+			"v: null\n",
+			map[string]map[string]string{"v": nil},
 			nil,
 		},
 		{
@@ -212,6 +196,11 @@ func TestEncodeTable(t *testing.T) {
 		{
 			"v: null\n",
 			map[string]interface{}{"v": nil},
+			nil,
+		},
+		{
+			"v: []\n", //is this ok to encode nil slice as zero-length?
+			map[string][]string{"v": nil},
 			nil,
 		},
 		{
@@ -575,7 +564,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a:\n  {}\n",
+			"a: {}\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitempty"`
@@ -614,14 +603,14 @@ func TestEncodeTable(t *testing.T) {
 				A struct{ X, y int } `yaml:"a,omitempty,flow"`
 			}{struct{ X, y int }{1, 2}},
 			nil,
-		}, /*
-			{
-				"{}\n",
-				struct {
-					A struct{ X, y int } `yaml:"a,omitempty,flow"`
-				}{struct{ X, y int }{0, 1}},
-				nil,
-			},*/
+		},
+		// {
+		// 	"{}\n",
+		// 	struct {
+		// 		A struct{ X, y int } `yaml:"a,omitempty,flow"`
+		// 	}{struct{ X, y int }{0, 1}},
+		// 	nil,
+		// },
 		{
 			"a: 1.0\n",
 			struct {
@@ -682,7 +671,7 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a:\n  {}\n",
+			"a: {}\n",
 			struct {
 				A *struct {
 					X string `yaml:"x,omitzero"`
@@ -721,14 +710,14 @@ func TestEncodeTable(t *testing.T) {
 				A struct{ X, y int } `yaml:"a,omitzero,flow"`
 			}{struct{ X, y int }{1, 2}},
 			nil,
-		}, /*
-			{
-				"{}\n",
-				struct {
-					A struct{ X, y int } `yaml:"a,omitzero,flow"`
-				}{struct{ X, y int }{0, 1}},
-				nil,
-			},*/
+		},
+		// {
+		// 	"{}\n",
+		// 	struct {
+		// 		A struct{ X, y int } `yaml:"a,omitzero,flow"`
+		// 	}{struct{ X, y int }{0, 1}},
+		// 	nil,
+		// },
 		{
 			"a: 1.0\n",
 			struct {
@@ -1008,8 +997,8 @@ func TestEncodeSliceOfStructs(t *testing.T) {
 			struct {
 				A []B `yaml:"a"`
 			}{[]B{
-				B{"xx", "yy"},
-				B{"xxx", "yyy"},
+				{"xx", "yy"},
+				{"xxx", "yyy"},
 			}},
 			nil,
 		},
@@ -1018,8 +1007,8 @@ func TestEncodeSliceOfStructs(t *testing.T) {
 			struct {
 				A []B `yaml:"a,flow"`
 			}{[]B{
-				B{"xx", "yy"},
-				B{"xxx", "yyy"},
+				{"xx", "yy"},
+				{"xxx", "yyy"},
 			}},
 			nil,
 		},
@@ -1426,7 +1415,6 @@ func TestEncoder_UnmarshallableTypes(t *testing.T) {
 
 type tMarshal []string
 
-// TODO: implement marshalYamler encoder
 func (t *tMarshal) MarshalYAML() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString("tags:")
@@ -1469,7 +1457,7 @@ line2
 line3`},
 			},
 			indent: 2,
-			want: `key: 
+			want: `key:
 - |-
   line1
   line2
@@ -1486,8 +1474,8 @@ line3`},
 				},
 			},
 			indent: 2,
-			want: `key: 
-  key2: 
+			want: `key:
+  key2:
   - |-
     line1
     line2
@@ -1542,8 +1530,8 @@ func TestBytesMarshaler(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := `
-a: 
-  b: 
+a:
+  b:
     c: foo
 `
 	got := "\n" + string(b)
@@ -1586,7 +1574,7 @@ func TestEncodeWithMerge(t *testing.T) {
 	expect := `default: &default
   name: John Smith
   age: 20
-people: 
+people:
 - <<: *default
   name: Ken
   age: 10
@@ -1732,7 +1720,7 @@ func TestEncoder_MarshalAnchorUnique(t *testing.T) {
 	if err := NewEncoder(&buf).Encode(doc); err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := `hosts: 
+	expect := `hosts:
 - host: &host
     hostname: host1.example.com
     username: userA
@@ -1741,7 +1729,7 @@ func TestEncoder_MarshalAnchorUnique(t *testing.T) {
     hostname: host2.example.com
     username: userB
     password: pass2
-queues: 
+queues:
 - name: queue
   host: *host
 - name: queue2
@@ -1760,24 +1748,12 @@ func TestEncodeAnchorSlice(t *testing.T) {
 		Age  int    `yaml:",omitempty"`
 	}
 	defaultPeople := []Person{
-		Person{
-			Name: "John Smith",
-			Age:  20,
-		},
-		Person{
-			Name: "Mary White",
-			Age:  25,
-		},
+		{Name: "John Smith", Age: 20},
+		{Name: "Mary White", Age: 25},
 	}
 	people := []Person{
-		{
-			Name: "Ken",
-			Age:  10,
-		},
-		{
-			Name: "Ben",
-			Age:  12,
-		},
+		{Name: "Ken", Age: 10},
+		{Name: "Ben", Age: 12},
 	}
 	var doc struct {
 		Default []Person `yaml:"default,anchor"`
@@ -1797,7 +1773,7 @@ func TestEncodeAnchorSlice(t *testing.T) {
   age: 20
 - name: Mary White
   age: 25
-people: 
+people:
 - name: Ken
   age: 10
 - name: Ben
@@ -1816,14 +1792,8 @@ func TestEncodeAnchorMap(t *testing.T) {
 		Age  int    `yaml:",omitempty"`
 	}
 	defaultPeople := map[string]Person{
-		"husband": Person{
-			Name: "John Smith",
-			Age:  20,
-		},
-		"wife": Person{
-			Name: "Mary White",
-			Age:  25,
-		},
+		"husband": {Name: "John Smith", Age: 20},
+		"wife":    {Name: "Mary White", Age: 25},
 	}
 	var doc struct {
 		Default map[string]Person `yaml:"default,anchor"`
@@ -1837,10 +1807,10 @@ func TestEncodeAnchorMap(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	expect := `default: &default
-  husband: 
+  husband:
     name: John Smith
     age: 20
-  wife: 
+  wife:
     name: Mary White
     age: 25
 staff: *default
@@ -1900,7 +1870,7 @@ func TestIssue259(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := `values: 
+	expected := `values:
 - baz: xxx
   value: &value
     foo: 3
