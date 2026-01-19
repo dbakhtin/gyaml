@@ -1885,3 +1885,20 @@ func TestIssue259(t *testing.T) {
 		t.Fatalf("expected [%s], got [%s]", expected, got)
 	}
 }
+
+func TestEncodeSliceOfSlices(t *testing.T) {
+	bytes, err := Marshal([][]int{
+		{1, 2},
+		{4, 6},
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	//TODO: add a new bit to nestedState (first) noLineBreak & use it accordingly
+	//for nested slices
+	expect := "- - 1\n  - 2\n- - 4\n  - 6\n"
+	actual := string(bytes)
+	if actual != expect {
+		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+	}
+}

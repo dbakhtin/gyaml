@@ -360,7 +360,9 @@ func (e *encodeState) reflectValue(v reflect.Value, opts encoderOptions, ns nest
 type nestedState int
 
 const (
-	inSlice nestedState = 2 << iota
+	//inLine is used mostly for printing slices of slices, so there is no linebreak for the first element
+	inLine nestedState = 2 << iota
+	inSlice
 	inStruct
 	inMap
 )
@@ -539,8 +541,9 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptio
 	e.Write(b)
 }
 
+// TODO: optimize?
 // TODO: remove opts & use only level + indentNum - or use a stripped options type
-// TODO: remove isScalar, it intersects with opts.isFlowStyle
+// TODO: remove isScalar, it intersects with opts.isFlowStyle?
 func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState) []byte {
 	if isScalar {
 		if ns&inSlice != 0 {
@@ -686,7 +689,6 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		return
 	}
 
-	//TODO: rewrite with []byte??
 	lbc := token.DetectLineBreakCharacter(s)
 	if strings.Contains(s, lbc) {
 		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
@@ -697,10 +699,10 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		}
 		indent := strings.Repeat(" ", opts.level*opts.indentNum)
 		values := []string{}
-		for _, v := range strings.Split(s, lbc) {
-			values = append(values, fmt.Sprintf("%s%s", indent, v))
+		for v := range strings.SplitSeq(s, lbc) {
+			values = append(values, indent+v)
 		}
-		block := strings.TrimSuffix(strings.TrimSuffix(strings.Join(values, lbc), fmt.Sprintf("%s%s", lbc, indent)), indent)
+		block := strings.TrimSuffix(strings.TrimSuffix(strings.Join(values, lbc), lbc+indent), indent)
 		b = appendString(b, header)
 		b = appendString(b, lbc)
 		e.Write(appendString(b, block))
@@ -984,13 +986,15 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 		}
 	}
 	n := v.Len()
-	b := appendIndent(e.AvailableBuffer(), opts.isFlowStyle || n == 0, opts, ns)
+	//TODO: replace ns with inStruct or move indent inside if?
 	if n == 0 {
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 		e.Write(append(b, '[', ']'))
 		return
 	}
 
 	if opts.isFlowStyle {
+		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 		e.Write(append(b, '['))
 		for i := range n {
 			if i > 0 {
@@ -1002,8 +1006,13 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 		return
 	}
 
+	// e.Write(b)
 	for i := range n {
-		ae.elemEnc(e, v.Index(i), opts, inSlice)
+		nsChild := inSlice
+		if i == 0 && ns&inSlice != 0 {
+			nsChild |= inLine //no linebreaks for child indent if encoding first element in slice of slices
+		}
+		ae.elemEnc(e, v.Index(i), opts, nsChild)
 	}
 }
 
