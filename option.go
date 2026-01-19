@@ -26,7 +26,7 @@ type encoderOptions struct {
 
 	//local options
 	level       int
-	nestedStack []int //replace int with nestedState & push everytime in struct/slice/map and pop in defered
+	nestedStack []nestedState //replace int with nestedState & push everytime in struct/slice/map and pop in defered
 }
 
 func defaultEncoderOptions() encoderOptions {
