@@ -25,7 +25,8 @@ type encoderOptions struct {
 	indentNum int
 
 	//local options
-	level int
+	level       int
+	nestedStack []int //replace int with nestedState & push everytime in struct/slice/map and pop in defered
 }
 
 func defaultEncoderOptions() encoderOptions {

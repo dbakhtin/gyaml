@@ -11,6 +11,7 @@
 * Less gc pressure & memory consumption upto 10 times ymmv, same example
 
 # TODO
+* Replace && ns&inSlice == 0 with ns&inSlice == 0 || opts.indentSequence & check
 * Test nested structs (>=2 levels)
 * Move linebreak out of appendIndent? to struct/map/array encoders
 * Optimize marked with //TODO: functions & algorithms
@@ -20,6 +21,7 @@
 * Check different indentNum options (<2, >2)
 * Check test coverage & update tests (that null checks, etc)
 * Write more tests with various kind of nesting (maps, structs, slices & again)
+
 
 # Decoder
 * fuzz_test.go

@@ -39,9 +39,31 @@ func TestEncode(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"v: null\n",
-			map[string]map[string]string{"v": nil},
+			"v:\n- A\n- 1\n- B:\n  - 2\n  - 3\n",
+			map[string]any{
+				"v": []any{
+					"A",
+					1,
+					map[string][]int{
+						"B": {2, 3},
+					},
+				},
+			},
 			nil,
+		},
+		{
+			"v:\n  - A\n  - 1\n  - B:\n      - 2\n      - 3\n  - 2\n",
+			map[string]interface{}{
+				"v": []interface{}{
+					"A",
+					1,
+					map[string][]int{
+						"B": {2, 3},
+					},
+					2,
+				},
+			},
+			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
 	}
 

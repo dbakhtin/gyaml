@@ -360,8 +360,8 @@ func (e *encodeState) reflectValue(v reflect.Value, opts encoderOptions, ns nest
 type nestedState int
 
 const (
-	//inLine is used mostly for printing slices of slices, so there is no linebreak for the first element
-	inLine nestedState = 2 << iota
+	//indentPrinted is used mostly for printing slices of slices, so there is no linebreak for the first element
+	indentPrinted nestedState = 1 << iota
 	inSlice
 	inStruct
 	inMap
@@ -545,6 +545,9 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptio
 // TODO: remove opts & use only level + indentNum - or use a stripped options type
 // TODO: remove isScalar, it intersects with opts.isFlowStyle?
 func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState) []byte {
+	if ns&indentPrinted != 0 {
+		return dst
+	}
 	if isScalar {
 		if ns&inSlice != 0 {
 			if opts.isFlowStyle {
@@ -732,7 +735,7 @@ type mapEncoder struct {
 }
 
 func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	if ns != 0 && ns != inSlice {
+	if ns != 0 && ns&inSlice == 0 {
 		opts.level++
 	}
 	if v.IsNil() {
@@ -778,6 +781,10 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 	})
 
 	for i, kv := range sv {
+		//reset indentPrinted bit after first element printed xD
+		if i > 0 && ns&indentPrinted != 0 {
+			ns = ns &^ indentPrinted
+		}
 		b := e.AvailableBuffer()
 
 		if opts.isFlowStyle {
@@ -835,7 +842,7 @@ type structFields struct {
 }
 
 func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	if ns != 0 && ns != inSlice {
+	if ns != 0 && ns&inSlice == 0 {
 		opts.level++
 	}
 	next := []byte{} //field separator
@@ -855,6 +862,10 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 FieldLoop:
 	for i := range se.fields.list {
 		f := &se.fields.list[i]
+		//reset indentPrinted bit after first element printed xD
+		if !empty && ns&indentPrinted != 0 {
+			ns = ns &^ indentPrinted
+		}
 
 		// Find the nested struct field by following f.index.
 		fv := v
@@ -1008,11 +1019,16 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 
 	// e.Write(b)
 	for i := range n {
-		nsChild := inSlice
-		if i == 0 && ns&inSlice != 0 {
-			nsChild |= inLine //no linebreaks for child indent if encoding first element in slice of slices
+		nsChild := inSlice | indentPrinted
+		if ns&indentPrinted == 0 {
+			e.Write(appendIndent(e.AvailableBuffer(), true, opts, inSlice))
+		} else {
+			//TODO: replace with appendIndent, because it respects indentNum
+			e.Write([]byte{'-', ' '})
 		}
+
 		ae.elemEnc(e, v.Index(i), opts, nsChild)
+		ns = ns &^ indentPrinted
 	}
 }
 
