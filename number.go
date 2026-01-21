@@ -46,7 +46,12 @@ func toNumber(value string) (*NumberValue, error) {
 	if len(value) == 0 {
 		return nil, nil
 	}
-	if strings.HasPrefix(value, "_") {
+	first := value[0]
+	//check the first rune, saves a lot of cpu
+	if !strings.ContainsRune("0123456789+-.", rune(first)) {
+		return nil, nil
+	}
+	if value[0] == '_' {
 		return nil, nil
 	}
 	dotCount := strings.Count(value, ".")
@@ -54,8 +59,8 @@ func toNumber(value string) (*NumberValue, error) {
 		return nil, nil
 	}
 
-	isNegative := strings.HasPrefix(value, "-")
-	normalized := strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(value, "+"), "-"), "_", "")
+	isNegative := value[0] == '-'
+	normalized := strings.ReplaceAll(strings.TrimLeft(value, "+-"), "_", "")
 
 	var (
 		typ  NumberType

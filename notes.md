@@ -7,11 +7,11 @@
 * No JSON marshaler
 * No yaml comments
 * Embedded structs are inlined by default with same priority shadowing as in encoding/json
-* Faster upto 6 times than go-yaml ymmv, see example
-* Less gc pressure & memory consumption upto 10 times ymmv, same example
+* Faster encoding upto 14 times than go-yaml ymmv, see example
+* Less gc pressure & memory consumption upto 14 times ymmv, same example
 
 # TODO
-* replace encoderOptions with a bitmask, move all map caches to encoderState
+* Test IsNumber
 * Optimize marked with //TODO: functions & algorithms
 * Commented tests with isEmpty for structs
 * Add options to Marshal func - can help with custom MarshalYAMLing, ex: global flow tag

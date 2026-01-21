@@ -279,8 +279,6 @@ func (e *MarshalerError) Error() string {
 // Unwrap returns the underlying error.
 func (e *MarshalerError) Unwrap() error { return e.Err }
 
-const hex = "0123456789abcdef"
-
 // An encodeState encodes YAML into a bytes.Buffer.
 type encodeState struct {
 	bytes.Buffer // accumulated output
@@ -292,6 +290,14 @@ type encodeState struct {
 	// reasonable amount of nested pointers deep.
 	ptrLevel uint
 	ptrSeen  map[any]struct{}
+
+	//anchor cache
+	anchors     map[uintptr]string
+	anchorNames map[string]uintptr
+	//nested level
+	level int
+
+	opts encoderOptions
 }
 
 const startDetectingCyclesAfter = 1000
@@ -306,9 +312,16 @@ func newEncodeState() *encodeState {
 			panic("ptrEncoder.encode should have emptied ptrSeen via defers")
 		}
 		e.ptrLevel = 0
+		e.level = 0
+		clear(e.anchors)
+		clear(e.anchorNames)
 		return e
 	}
-	return &encodeState{ptrSeen: make(map[any]struct{})}
+	return &encodeState{
+		ptrSeen:     make(map[any]struct{}),
+		anchors:     make(map[uintptr]string),
+		anchorNames: make(map[string]uintptr),
+	}
 }
 
 // yamlError is an error wrapper type for internal use only.
@@ -326,7 +339,8 @@ func (e *encodeState) marshal(v any, opts encoderOptions) (err error) {
 			}
 		}
 	}()
-	e.reflectValue(reflect.ValueOf(v), opts, 0)
+	e.opts = opts
+	e.reflectValue(reflect.ValueOf(v), 0)
 	return nil
 }
 
@@ -350,8 +364,8 @@ func isEmptyValue(v reflect.Value) bool {
 	return false
 }
 
-func (e *encodeState) reflectValue(v reflect.Value, opts encoderOptions, ns nestedState) {
-	valueEncoder(v)(e, v, opts, ns)
+func (e *encodeState) reflectValue(v reflect.Value, ns nestedState) {
+	valueEncoder(v)(e, v, ns)
 }
 
 // nestedState keeps a bitmap for the parent type: struct, map or slice/array
@@ -365,7 +379,7 @@ const (
 	inMap
 )
 
-type encoderFunc func(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState)
+type encoderFunc func(e *encodeState, v reflect.Value, ns nestedState)
 
 var encoderCache sync.Map // map[reflect.Type]encoderFunc
 
@@ -390,8 +404,8 @@ func typeEncoder(t reflect.Type) encoderFunc {
 	indirect := sync.OnceValue(func() encoderFunc {
 		return newTypeEncoder(t, true)
 	})
-	fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(func(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-		indirect()(e, v, opts, ns)
+	fi, loaded := encoderCache.LoadOrStore(t, encoderFunc(func(e *encodeState, v reflect.Value, ns nestedState) {
+		indirect()(e, v, ns)
 	}))
 	if loaded {
 		return fi.(encoderFunc)
@@ -455,26 +469,26 @@ func newTypeEncoder(t reflect.Type, allowAddr bool) encoderFunc {
 	}
 }
 
-func invalidValueEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+func invalidValueEncoder(e *encodeState, v reflect.Value, ns nestedState) {
+	b := appendIndent(e, true, ns)
 	e.Write(appendString(b, "null"))
 }
 
-func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func marshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
 	m, ok := v.Interface().(Marshaler)
 	if !ok {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
 	my, err := m.MarshalYAML()
 	if err == nil {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(append(b, my...))
 	}
 	if err != nil {
@@ -482,17 +496,17 @@ func marshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns n
 	}
 }
 
-func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func addrMarshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
 	m := va.Interface().(Marshaler)
 	my, err := m.MarshalYAML()
 	if err == nil {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(append(b, my...))
 	}
 	if err != nil {
@@ -500,15 +514,15 @@ func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, 
 	}
 }
 
-func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func textMarshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.Kind() == reflect.Pointer && v.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
 	m, ok := v.Interface().(encoding.TextMarshaler)
 	if !ok {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
@@ -517,7 +531,7 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, 
 		e.error(&MarshalerError{v.Type(), err, "MarshalText"})
 	}
 	s := string(mt)
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	b := appendIndent(e, true, ns)
 	if isNeedQuoted(s) {
 		e.Write(strconv.AppendQuote(b, s))
 		return
@@ -525,7 +539,7 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, 
 	e.Write(append(b, mt...))
 }
 
-func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
 		e.WriteString("null")
@@ -551,17 +565,18 @@ func indent(level, indentNum int, isSlice bool) []byte {
 	return indent
 }
 
-func appendIndent(dst []byte, inline bool, opts encoderOptions, ns nestedState) []byte {
+// appendIndent appends a calculated indent to dst []byte and returns it
+func appendIndentBuf(e *encodeState, dst []byte, inline bool, ns nestedState) []byte {
 	if ns&indentPrinted != 0 {
 		return dst
 	}
 	//for slices: elements always start with line break unless flow styled
 	if ns&inSlice != 0 {
-		if opts.isFlowStyle {
+		if e.opts.flowStyle {
 			return dst
 		}
 		dst = append(dst, '\n')
-		return append(dst, indent(opts.level, opts.indentNum, true)...)
+		return append(dst, indent(e.level, e.opts.indentSize, true)...)
 	}
 	//for structs & maps
 	if ns != 0 {
@@ -569,7 +584,7 @@ func appendIndent(dst []byte, inline bool, opts encoderOptions, ns nestedState) 
 			return append(dst, ' ')
 		}
 		dst = append(dst, '\n')
-		return append(dst, indent(opts.level, opts.indentNum, ns&inSlice != 0)...)
+		return append(dst, indent(e.level, e.opts.indentSize, ns&inSlice != 0)...)
 	}
 	//top-level non-inline
 	if ns == 0 && !inline {
@@ -578,33 +593,39 @@ func appendIndent(dst []byte, inline bool, opts encoderOptions, ns nestedState) 
 	return dst
 }
 
+// appendIndent appends a calculated indent to e.AvailableBuffer() and returns a []byte
+func appendIndent(e *encodeState, inline bool, ns nestedState) []byte {
+	return appendIndentBuf(e, e.AvailableBuffer(), inline, ns)
+}
+
 func appendString(dst []byte, str string) []byte {
 	return append(dst, []byte(str)...)
 }
 
-func boolEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+func boolEncoder(e *encodeState, v reflect.Value, ns nestedState) {
+
+	b := appendIndent(e, true, ns)
 	b = strconv.AppendBool(b, v.Bool())
 	e.Write(b)
 }
 
-func intEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func intEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.CanInterface() {
 		if t, ok := v.Interface().(time.Duration); ok {
-			encodeDuration(e, t, opts, ns)
+			encodeDuration(e, t, ns)
 			return
 		}
 	}
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	b := appendIndent(e, true, ns)
 	b = strconv.AppendInt(b, v.Int(), 10)
 	e.Write(b)
 }
 
-func encodeDuration(e *encodeState, d time.Duration, opts encoderOptions, ns nestedState) {
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+func encodeDuration(e *encodeState, d time.Duration, ns nestedState) {
+	b := appendIndent(e, true, ns)
 	var value []byte
-	if opts.isJSONStyle {
-		value = []byte(quoteString(e, d.String(), opts))
+	if e.opts.JSONStyle {
+		value = []byte(quoteString(e, d.String()))
 	} else {
 		value = []byte(d.String())
 	}
@@ -612,17 +633,17 @@ func encodeDuration(e *encodeState, d time.Duration, opts encoderOptions, ns nes
 	e.Write(b)
 }
 
-func uintEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+func uintEncoder(e *encodeState, v reflect.Value, ns nestedState) {
+	b := appendIndent(e, true, ns)
 	b = strconv.AppendUint(b, v.Uint(), 10)
 	e.Write(b)
 }
 
 type floatEncoder int // number of bits
 
-func (bits floatEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (bits floatEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 	f := v.Float()
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	b := appendIndent(e, true, ns)
 	if f == math.Inf(0) {
 		e.Write(appendString(b, ".inf"))
 		return
@@ -635,7 +656,7 @@ func (bits floatEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpt
 	}
 
 	b = strconv.AppendFloat(b, f, byte('g'), -1, int(bits))
-	if !bytes.Contains(b, []byte{'e'}) && !bytes.Contains(b, []byte{'.'}) && !opts.autoInt {
+	if !bytes.Contains(b, []byte{'e'}) && !bytes.Contains(b, []byte{'.'}) && !e.opts.autoInt {
 		// append x.0 suffix to keep float value context
 		b = append(b, '.', '0')
 	}
@@ -648,17 +669,17 @@ var (
 )
 
 // isNeedQuotedOpts checks whether the value needs quote for passed string or not
-func isNeedQuotedOpts(value string, opts encoderOptions) bool {
-	if opts.isJSONStyle {
+func isNeedQuotedOpts(value string, opts *encoderOptions) bool {
+	if opts.JSONStyle {
 		return true
 	}
-	if opts.useLiteralStyleIfMultiline && strings.ContainsAny(value, "\n\r") {
+	if opts.literalStyleMultiline && strings.ContainsAny(value, "\n\r") {
 		return false
 	}
-	if opts.isFlowStyle && strings.ContainsAny(value, `]},'"`) {
+	if opts.flowStyle && strings.ContainsAny(value, `]},'"`) {
 		return true
 	}
-	if opts.isFlowStyle {
+	if opts.flowStyle {
 		for i := 0; i < len(value); i++ {
 			if value[i] != ':' {
 				continue
@@ -673,19 +694,19 @@ func isNeedQuotedOpts(value string, opts encoderOptions) bool {
 	return isNeedQuoted(value)
 }
 
-func quoteString(_ *encodeState, s string, opts encoderOptions) string {
-	if opts.singleQuote {
+func quoteString(e *encodeState, s string) string {
+	if e.opts.singleQuote {
 		return quoteWith(s, '\'')
 	}
 	return strconv.Quote(s)
 }
 
-func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func stringEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	s := v.String()
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	b := appendIndent(e, true, ns)
 
-	if isNeedQuotedOpts(s, opts) {
-		e.Write(appendString(b, quoteString(e, s, opts)))
+	if isNeedQuotedOpts(s, &e.opts) {
+		e.Write(appendString(b, quoteString(e, s)))
 		return
 	}
 
@@ -694,10 +715,11 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
 		// It works mostly, but inconsistencies occur if line break characters are mixed.
 		header := literalBlockHeader(s)
+		level := e.level
 		if ns&inSlice == 0 {
-			opts.level++
+			level++
 		}
-		indent := strings.Repeat(" ", opts.level*opts.indentNum)
+		indent := strings.Repeat(" ", level*e.opts.indentSize)
 		values := []string{}
 		for v := range strings.SplitSeq(s, lbc) {
 			values = append(values, indent+v)
@@ -711,16 +733,16 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 	e.Write(appendString(b, s))
 }
 
-func interfaceEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func interfaceEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
-	e.reflectValue(v.Elem(), opts, ns)
+	e.reflectValue(v.Elem(), ns)
 }
 
-func unsupportedTypeEncoder(e *encodeState, v reflect.Value, _ encoderOptions, _ nestedState) {
+func unsupportedTypeEncoder(e *encodeState, v reflect.Value, _ nestedState) {
 	e.error(&UnsupportedTypeError{v.Type()})
 }
 
@@ -730,39 +752,40 @@ type mapEncoder struct {
 
 // if flow style enabled, use this encode, just to make code more clear
 // the map here is nonempty, all checks passed
-func (me mapEncoder) encodeFlow(e *encodeState, sv []reflectWithString, opts encoderOptions, ns nestedState) {
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+func (me mapEncoder) encodeFlow(e *encodeState, sv []reflectWithString, ns nestedState) {
+	b := appendIndent(e, true, ns)
 	e.Write(append(b, '{'))
 	next := []byte{}
 	for _, kv := range sv {
 		b := append(e.AvailableBuffer(), next...)
 		next = []byte{',', ' '}
 
-		if opts.isJSONStyle {
-			kv.ks = quoteString(e, kv.ks, opts)
+		if e.opts.JSONStyle {
+			kv.ks = quoteString(e, kv.ks)
 		}
 		b = appendString(b, kv.ks)
 
 		b = append(b, ':')
 		e.Write(b)
-		me.elemEnc(e, kv.v, opts, inMap)
+		me.elemEnc(e, kv.v, inMap)
 	}
-	if opts.isFlowStyle {
+	if e.opts.flowStyle {
 		e.WriteByte('}')
 	}
 }
 
-func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (me mapEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 	if ns != 0 && ns&inSlice == 0 {
-		opts.level++
+		e.level++
+		defer func() { e.level-- }()
 	}
 	if v.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
 	if v.Len() == 0 {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "{}"))
 		return
 	}
@@ -794,29 +817,27 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		return strings.Compare(i.ks, j.ks)
 	})
 
-	if opts.isFlowStyle {
-		me.encodeFlow(e, sv, opts, ns)
+	if e.opts.flowStyle {
+		me.encodeFlow(e, sv, ns)
 		return
 	}
 
 	for _, kv := range sv {
-		b := appendIndent(e.AvailableBuffer(), false, opts, ns)
+		b := appendIndent(e, false, ns)
 
-		if opts.isJSONStyle {
-			kv.ks = quoteString(e, kv.ks, opts)
+		if e.opts.JSONStyle {
+			kv.ks = quoteString(e, kv.ks)
 		}
 		b = appendString(b, kv.ks)
 
 		b = append(b, ':')
 		e.Write(b)
-		me.elemEnc(e, kv.v, opts, inMap)
+		me.elemEnc(e, kv.v, inMap)
 		//after first field printed:
 		//remove inSlice + indentPrinted bit, so it does not print '-'
 		//set ns = inStruct just to preserve the indent size
 		ns = inStruct
 	}
-
-	// e.ptrLevel--
 }
 
 func newMapEncoder(t reflect.Type) encoderFunc {
@@ -835,8 +856,8 @@ func newMapEncoder(t reflect.Type) encoderFunc {
 }
 
 // mergeAlias merges an alias if found in anchor's map
-func mergeAlias(e *encodeState, ptr uintptr, opts encoderOptions) bool {
-	anchor, ok := getAnchor(opts, ptr)
+func mergeAlias(e *encodeState, ptr uintptr) bool {
+	anchor, ok := getAnchor(e, ptr)
 	if ok {
 		e.WriteString("<<: *" + anchor)
 	}
@@ -844,8 +865,8 @@ func mergeAlias(e *encodeState, ptr uintptr, opts encoderOptions) bool {
 }
 
 // encodeAlias encodes alias if found in anchor's map, returns true is successful
-func encodeAlias(e *encodeState, ptr uintptr, alias string, opts encoderOptions) bool {
-	anchor, ok := getAnchor(opts, ptr)
+func encodeAlias(e *encodeState, ptr uintptr, alias string) bool {
+	anchor, ok := getAnchor(e, ptr)
 	if ok {
 		//alias validity check
 		if alias != "" && anchor != alias {
@@ -856,9 +877,9 @@ func encodeAlias(e *encodeState, ptr uintptr, alias string, opts encoderOptions)
 	return ok
 }
 
-func encodeAnchor(e *encodeState, ptr uintptr, anchor string, opts encoderOptions) {
+func encodeAnchor(e *encodeState, ptr uintptr, anchor string) {
 	if anchor != "" {
-		anch := storeAnchor(opts, ptr, anchor)
+		anch := storeAnchor(e, ptr, anchor)
 		if anch == "" {
 			e.error(fmt.Errorf("unexpected empty anchor name"))
 		}
@@ -882,7 +903,7 @@ type exportedField struct {
 	fv reflect.Value
 }
 
-func (se structEncoder) exportedFields(v reflect.Value, opts encoderOptions) []exportedField {
+func (se structEncoder) exportedFields(e *encodeState, v reflect.Value) []exportedField {
 	eFields := make([]exportedField, 0, len(se.fields.list))
 
 FieldLoop:
@@ -900,8 +921,8 @@ FieldLoop:
 			fv = fv.Field(i)
 		}
 
-		if ((f.omitEmpty || opts.omitEmpty) && isEmptyValue(fv)) ||
-			((f.omitZero || opts.omitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
+		if ((f.omitEmpty || e.opts.omitEmpty) && isEmptyValue(fv)) ||
+			((f.omitZero || e.opts.omitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
 			continue
 		}
 		eFields = append(eFields, exportedField{f, fv})
@@ -910,13 +931,14 @@ FieldLoop:
 	return eFields
 }
 
-func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 	if ns != 0 && ns&inSlice == 0 {
-		opts.level++
+		e.level++
+		defer func() { e.level-- }()
 	}
 	next := []byte{} //field separator
-	if opts.isFlowStyle {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	if e.opts.flowStyle {
+		b := appendIndent(e, true, ns)
 		e.Write(append(b, '{'))
 	}
 
@@ -927,7 +949,7 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 	anchorsFound := make(map[reflect.Type]struct{})
 	//check this when printing a slice of structs, or empty/with private fields only/ structs
 	empty := true
-	fields := se.exportedFields(v, opts)
+	fields := se.exportedFields(e, v)
 	for i := range fields {
 		f := fields[i].f
 		fv := fields[i].fv
@@ -938,7 +960,7 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 		// if its a reference to embedded struct & no anchors found, ignore the ref
 		// this is an artificial field with only purpose to track anchors
 		if f.isAnonymousRef {
-			if _, ok := getAnchor(opts, fv.Pointer()); !ok {
+			if _, ok := getAnchor(e, fv.Pointer()); !ok {
 				continue
 			}
 		}
@@ -954,29 +976,29 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 		}
 
 		b := append(e.AvailableBuffer(), next...)
-		if opts.isFlowStyle {
+		if e.opts.flowStyle {
 			next = []byte{',', ' '}
 		}
 
-		if !opts.isFlowStyle {
+		if !e.opts.flowStyle {
 			if !empty && ns&inSlice != 0 {
 				//for second field and on remove inSlice bit so it does not print '-'
 				//add inStruct bit just to preserve the indent size
 				ns = ns&^inSlice | inStruct
 			}
-			b = appendIndent(b, false, opts, ns)
+			b = appendIndentBuf(e, b, false, ns)
 		}
 		empty = false
 		//anonymous self embed with pointer, like struct Person{*Person...}, f->*Person field
 		if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
-			if found := mergeAlias(e, fv.Pointer(), opts); found {
+			if found := mergeAlias(e, fv.Pointer()); found {
 				continue
 			}
 		}
 
-		if opts.isJSONStyle {
+		if e.opts.JSONStyle {
 			//quote struct fields
-			b = appendString(b, quoteString(e, f.name, opts))
+			b = appendString(b, quoteString(e, f.name))
 		} else {
 			b = append(b, f.nameBytes...)
 		}
@@ -984,25 +1006,27 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 		//types of possible anchors/aliases
 		isReference := (fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Map || fv.Kind() == reflect.Slice)
 		if isReference {
-			if found := encodeAlias(e, fv.Pointer(), f.alias, opts); found {
+			if found := encodeAlias(e, fv.Pointer(), f.alias); found {
 				if fv.Kind() == reflect.Pointer {
 					anchorsFound[fv.Elem().Type()] = struct{}{}
 				}
 				continue
 			}
 
-			encodeAnchor(e, fv.Pointer(), f.anchor, opts)
+			encodeAnchor(e, fv.Pointer(), f.anchor)
 		}
-		fOpts := opts
+		oldFlow := e.opts.flowStyle
 		//merge global flow with field flow
-		fOpts.isFlowStyle = fOpts.isFlowStyle || f.flow
-		f.encoder(e, fv, fOpts, inStruct)
+		e.opts.flowStyle = e.opts.flowStyle || f.flow
+		f.encoder(e, fv, inStruct)
+		//and revert back ;)
+		e.opts.flowStyle = oldFlow
 	}
 	//if no fields printed
-	if empty && !opts.isFlowStyle {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	if empty && !e.opts.flowStyle {
+		b := appendIndent(e, true, ns)
 		e.Write(append(b, '{', '}'))
-	} else if opts.isFlowStyle {
+	} else if e.opts.flowStyle {
 		e.WriteByte('}')
 	}
 }
@@ -1017,36 +1041,38 @@ type arrayEncoder struct {
 }
 
 // flow style encoder, made it separate for readability
-func (ae arrayEncoder) encodeFlow(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (ae arrayEncoder) encodeFlow(e *encodeState, v reflect.Value, ns nestedState) {
 	n := v.Len()
-	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	b := appendIndent(e, true, ns)
 	e.Write(append(b, '['))
 	for i := range n {
 		if i > 0 {
 			e.Write([]byte{',', ' '})
 		}
-		ae.elemEnc(e, v.Index(i), opts, inSlice)
+		ae.elemEnc(e, v.Index(i), inSlice)
 	}
 	e.WriteByte(']')
 }
 
-func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
-	if ns != 0 || opts.level == 0 && !opts.isFlowStyle {
-		opts.level++
+func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
+	if ns != 0 || e.level == 0 && !e.opts.flowStyle {
+		e.level++
+		defer func() { e.level-- }()
 		//just add one more indent? or check if ns&inMap != 0 || ns&inStruct != 0
-		if opts.indentSequence {
-			opts.level++
+		if e.opts.indentSequence {
+			e.level++
+			defer func() { e.level-- }()
 		}
 	}
 	n := v.Len()
 	if n == 0 {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(append(b, '[', ']'))
 		return
 	}
 
-	if opts.isFlowStyle {
-		ae.encodeFlow(e, v, opts, ns)
+	if e.opts.flowStyle {
+		ae.encodeFlow(e, v, ns)
 		return
 	}
 
@@ -1060,12 +1086,12 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 	for i := range n {
 		nsChild := inSlice | indentPrinted
 		if ns&indentPrinted == 0 {
-			e.Write(appendIndent(e.AvailableBuffer(), false, opts, inSlice))
+			e.Write(appendIndent(e, false, inSlice))
 		} else {
 			//if slice of slices and this is the second slice, just print "- "
-			e.Write(indent(1, opts.indentNum, true))
+			e.Write(indent(1, e.opts.indentSize, true))
 		}
-		ae.elemEnc(e, v.Index(i), opts, nsChild)
+		ae.elemEnc(e, v.Index(i), nsChild)
 		ns = ns &^ indentPrinted //reset the indentPrinted bit, coming from parent ns
 	}
 }
@@ -1079,9 +1105,9 @@ type ptrEncoder struct {
 	elemEnc encoderFunc
 }
 
-func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.IsNil() {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+		b := appendIndent(e, true, ns)
 		e.Write(appendString(b, "null"))
 		return
 	}
@@ -1095,7 +1121,7 @@ func (pe ptrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		e.ptrSeen[ptr] = struct{}{}
 		defer delete(e.ptrSeen, ptr)
 	}
-	pe.elemEnc(e, v.Elem(), opts, ns)
+	pe.elemEnc(e, v.Elem(), ns)
 	e.ptrLevel--
 }
 
@@ -1108,11 +1134,11 @@ type condAddrEncoder struct {
 	canAddrEnc, elseEnc encoderFunc
 }
 
-func (ce condAddrEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+func (ce condAddrEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 	if v.CanAddr() {
-		ce.canAddrEnc(e, v, opts, ns)
+		ce.canAddrEnc(e, v, ns)
 	} else {
-		ce.elseEnc(e, v, opts, ns)
+		ce.elseEnc(e, v, ns)
 	}
 }
 
@@ -1499,26 +1525,26 @@ func cachedTypeFields(t reflect.Type) structFields {
 // has an anchor with the same name but different ptr (name collision)
 // then it makes a unique name by appending number suffix, stores
 // and returns it
-func storeAnchor(options encoderOptions, ptr uintptr, name string) string {
+func storeAnchor(e *encodeState, ptr uintptr, name string) string {
 	if ptr == 0 || name == "" {
 		return ""
 	}
-	if cachedPtr, ok := options.anchorNames[name]; ok {
+	if cachedPtr, ok := e.anchorNames[name]; ok {
 		if cachedPtr == ptr {
 			return name
 		}
-		name = uniqueAnchorName(options, name)
+		name = uniqueAnchorName(e, name)
 	}
-	options.anchors[ptr] = name
-	options.anchorNames[name] = ptr
+	e.anchors[ptr] = name
+	e.anchorNames[name] = ptr
 	return name
 }
 
-func uniqueAnchorName(options encoderOptions, base string) string {
+func uniqueAnchorName(e *encodeState, base string) string {
 	//anchor name already exists in cache no need to check again
 	for i := 1; i < 100; i++ {
 		name := base + strconv.Itoa(i)
-		if _, exists := options.anchorNames[name]; exists {
+		if _, exists := e.anchorNames[name]; exists {
 			continue
 		}
 		return name
@@ -1526,7 +1552,7 @@ func uniqueAnchorName(options encoderOptions, base string) string {
 	return ""
 }
 
-func getAnchor(options encoderOptions, ref uintptr) (string, bool) {
-	name, exists := options.anchors[ref]
+func getAnchor(e *encodeState, ref uintptr) (string, bool) {
+	name, exists := e.anchors[ref]
 	return name, exists
 }

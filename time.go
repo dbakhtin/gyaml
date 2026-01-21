@@ -1,6 +1,9 @@
 package gyaml
 
-import "time"
+import (
+	"regexp"
+	"time"
+)
 
 // This is a subset of the formats permitted by the regular expression
 // defined at http://yaml.org/type/timestamp.html. Note that time.Parse
@@ -15,7 +18,13 @@ var timestampFormats = []string{
 	"15:4",
 }
 
+var legalTimeChars = regexp.MustCompile(`^[0-9]+[-:0-9\stTzZ.]*$`)
+
 func isTimestamp(value string) bool {
+	//rude check if not a timestamp, saves a looot of cpu
+	if !legalTimeChars.MatchString(value) {
+		return false
+	}
 	for _, format := range timestampFormats {
 		if _, err := time.Parse(format, value); err == nil {
 			return true

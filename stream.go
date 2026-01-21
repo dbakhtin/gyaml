@@ -11,10 +11,8 @@ import (
 	"io"
 )
 
-//TODO: Decoder
-
 // TODO: make private?
-// An Encoder writes JSON values to an output stream.
+// An Encoder writes YAML values to an output stream.
 type Encoder struct {
 	w   io.Writer
 	err error
@@ -29,10 +27,11 @@ func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w: w, options: defaultEncoderOptions()}
 }
 
-func (e *Encoder) WithOptions(opts *encoderOptions) *Encoder {
-	if opts != nil {
-		e.options = *opts
+func (e *Encoder) WithOptions(opts encoderOptions) *Encoder {
+	if opts.indentSize < 2 {
+		e.err = errors.New("wrong indent size option")
 	}
+	e.options = opts
 	return e
 }
 
@@ -44,13 +43,13 @@ func (e *Encoder) WithSingleQuote(yes bool) *Encoder {
 
 // Flow style for sequences
 func (e *Encoder) WithFlowStyle(yes bool) *Encoder {
-	e.options.isFlowStyle = yes
+	e.options.flowStyle = yes
 	return e
 }
 
 // WIthJSONStyle uses json style for encoding
 func (e *Encoder) WithJSONStyle(yes bool) *Encoder {
-	e.options.isJSONStyle = yes
+	e.options.JSONStyle = yes
 	return e
 }
 
@@ -80,7 +79,7 @@ func (e *Encoder) WithAutoInt(yes bool) *Encoder {
 // WithLiteralMultilineStyle causes encoding multiline strings with a literal syntax,
 // no matter what characters they include
 func (e *Encoder) WithLiteralMultilineStyle(yes bool) *Encoder {
-	e.options.useLiteralStyleIfMultiline = yes
+	e.options.literalStyleMultiline = yes
 	return e
 }
 
@@ -89,7 +88,7 @@ func (e *Encoder) WithIndent(size int) *Encoder {
 	if size < 2 {
 		e.err = errors.New("wrong indent size option")
 	}
-	e.options.indentNum = size
+	e.options.indentSize = size
 	return e
 }
 
@@ -97,11 +96,6 @@ func (e *Encoder) WithIndent(size int) *Encoder {
 func (e *Encoder) WithIndentSequence(yes bool) *Encoder {
 	e.options.indentSequence = yes
 	return e
-}
-
-func (e *Encoder) clearAnchorCache() {
-	clear(e.options.anchors)
-	clear(e.options.anchorNames)
 }
 
 // Encode writes the Yaml encoding of v to the stream,
@@ -135,8 +129,6 @@ func (enc *Encoder) Encode(v any) error {
 	// so that the reader knows there aren't more
 	// digits coming.
 	e.WriteByte('\n')
-
-	enc.clearAnchorCache()
 
 	if !enc.documentWritten {
 		enc.documentWritten = true
