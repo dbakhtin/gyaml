@@ -54,14 +54,6 @@ func (e *Encoder) WithJSONStyle(yes bool) *Encoder {
 	return e
 }
 
-// UseJSONMarshaler if neither `BytesMarshaler` nor `InterfaceMarshaler`
-// nor `encoding.TextMarshaler` is implemented and `MarshalJSON()([]byte, error)` is implemented,
-// call `MarshalJSON` to convert the returned `JSON` to `YAML` for processing.
-func (e *Encoder) WithJSONMarshaler(yes bool) *Encoder {
-	e.options.useJSONMarshaler = yes
-	return e
-}
-
 // OmitZero forces the encoder to assume an `omitzero` struct tag is
 // set on all the fields. See `Marshal` commentary for the `omitzero` tag logic.
 func (e *Encoder) WithOmitZero(yes bool) *Encoder {

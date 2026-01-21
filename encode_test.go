@@ -6,10 +6,13 @@ package gyaml
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -39,31 +42,9 @@ func TestEncode(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"v:\n- A\n- 1\n- B:\n  - 2\n  - 3\n",
-			map[string]any{
-				"v": []any{
-					"A",
-					1,
-					map[string][]int{
-						"B": {2, 3},
-					},
-				},
-			},
+			"v: \"Null\"\n",
+			map[string]string{"v": "Null"},
 			nil,
-		},
-		{
-			"v:\n  - A\n  - 1\n  - B:\n      - 2\n      - 3\n  - 2\n",
-			map[string]interface{}{
-				"v": []interface{}{
-					"A",
-					1,
-					map[string][]int{
-						"B": {2, 3},
-					},
-					2,
-				},
-			},
-			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
 	}
 
@@ -103,16 +84,6 @@ func TestEncodeTable(t *testing.T) {
 		{
 			"v: hi\n",
 			map[string]string{"v": "hi"},
-			nil,
-		},
-		{
-			"v: \"true\"\n",
-			map[string]string{"v": "true"},
-			nil,
-		},
-		{
-			"v: \"false\"\n",
-			map[string]string{"v": "false"},
 			nil,
 		},
 		{
@@ -226,18 +197,23 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"v: \"\"\n",
-			map[string]string{"v": ""},
-			nil,
-		},
-		{
 			"v:\n- A\n- B\n",
 			map[string][]string{"v": {"A", "B"}},
 			nil,
 		},
 		{
+			"v:\n- A\n- B\n",
+			struct{ V []string }{V: []string{"A", "B"}},
+			nil,
+		},
+		{
 			"v:\n  - A\n  - B\n",
 			map[string][]string{"v": {"A", "B"}},
+			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
+		},
+		{
+			"v:\n  - A\n  - B\n",
+			struct{ V []string }{V: []string{"A", "B"}},
 			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
 		},
 		{
@@ -249,15 +225,20 @@ func TestEncodeTable(t *testing.T) {
 			"v:\n  - A\n  - B\n",
 			map[string][2]string{"v": {"A", "B"}},
 			func(e *Encoder) *Encoder { return e.WithIndentSequence(true) },
-		},
-		{
-			"a: \"-\"\n",
-			map[string]string{"a": "-"},
-			nil,
 		},
 		{
 			"1: v\n",
 			map[int]string{1: "v"},
+			nil,
+		},
+		{
+			"1: v\n",
+			map[uint]string{1: "v"},
+			nil,
+		},
+		{
+			"1.1: v\n",
+			map[float32]string{1.1: "v"},
 			nil,
 		},
 		{
@@ -271,11 +252,6 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"2015-01-01T00:00:00Z: v\n",
-			map[time.Time]string{time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC): "v"},
-			nil,
-		},
-		{
 			"123\n",
 			123,
 			nil,
@@ -284,46 +260,6 @@ func TestEncodeTable(t *testing.T) {
 			"hello: world\n",
 			map[string]string{"hello": "world"},
 			nil,
-		},
-		{
-			"hello: |\n  hello\n  world\n",
-			map[string]string{"hello": "hello\nworld\n"},
-			nil,
-		},
-		{
-			"hello: |-\n  hello\n  world\n",
-			map[string]string{"hello": "hello\nworld"},
-			nil,
-		},
-		{
-			"hello: |+\n  hello\n  world\n\n",
-			map[string]string{"hello": "hello\nworld\n\n"},
-			nil,
-		},
-		{
-			"hello:\n  hello: |\n    hello\n    world\n",
-			map[string]map[string]string{"hello": {"hello": "hello\nworld\n"}},
-			nil,
-		},
-		{
-			"hello: |\r  hello\r  world\n",
-			map[string]string{"hello": "hello\rworld\r"},
-			nil,
-		},
-		{
-			"hello: |\r\n  hello\r\n  world\n",
-			map[string]string{"hello": "hello\r\nworld\r\n"},
-			nil,
-		},
-		{
-			"v: |-\n  username: hello\n  password: hello123\n",
-			map[string]any{"v": "username: hello\npassword: hello123"},
-			func(e *Encoder) *Encoder { return e.WithLiteralMultilineStyle(true) },
-		},
-		{
-			"v: |-\n  # comment\n  username: hello\n  password: hello123\n",
-			map[string]any{"v": "# comment\nusername: hello\npassword: hello123"},
-			func(e *Encoder) *Encoder { return e.WithLiteralMultilineStyle(true) },
 		},
 		{
 			"v: \"# comment\\nusername: hello\\npassword: hello123\"\n",
@@ -367,14 +303,6 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"t2: \"2018-01-09T10:40:47Z\"\nt4: \"2098-01-09T10:40:47Z\"\n",
-			map[string]string{
-				"t2": "2018-01-09T10:40:47Z",
-				"t4": "2098-01-09T10:40:47Z",
-			},
-			nil,
-		},
-		{
 			"a:\n  b: c\n  d: e\n",
 			map[string]interface{}{
 				"a": map[string]string{
@@ -397,43 +325,8 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \"1:1\"\n",
-			map[string]string{"a": "1:1"},
-			nil,
-		},
-		{
 			"a: 1.2.3.4\n",
 			map[string]string{"a": "1.2.3.4"},
-			nil,
-		},
-		{
-			"a: \"b: c\"\n",
-			map[string]string{"a": "b: c"},
-			nil,
-		},
-		{
-			"a: \"Hello #comment\"\n",
-			map[string]string{"a": "Hello #comment"},
-			nil,
-		},
-		{
-			"a: \" b\"\n",
-			map[string]string{"a": " b"},
-			nil,
-		},
-		{
-			"a: \"b \"\n",
-			map[string]string{"a": "b "},
-			nil,
-		},
-		{
-			"a: \" b \"\n",
-			map[string]string{"a": " b "},
-			nil,
-		},
-		{
-			"a: \"`b` c\"\n",
-			map[string]string{"a": "`b` c"},
 			nil,
 		},
 		{
@@ -441,11 +334,6 @@ func TestEncodeTable(t *testing.T) {
 			map[string]interface{}{
 				"a": 100.5,
 			},
-			nil,
-		},
-		{
-			"a: \"\\\\0\"\n",
-			map[string]string{"a": "\\0"},
 			nil,
 		},
 		{
@@ -511,29 +399,11 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a: \"\"\n",
-			struct {
-				A string
-			}{
-				"",
-			},
-			nil,
-		},
-		{
 			"a: null\n",
 			struct {
 				A *string
 			}{
 				nil,
-			},
-			nil,
-		},
-		{
-			"a: \"\"\n",
-			struct {
-				A *string
-			}{
-				&emptyStr,
 			},
 			nil,
 		},
@@ -555,7 +425,120 @@ func TestEncodeTable(t *testing.T) {
 			},
 			nil,
 		},
-		// Omitempty flag.
+
+		// No quoting in non-flow mode
+		{
+			"a:\n- b\n- c,d\n- e\n",
+			struct {
+				A []string `yaml:"a"`
+			}{[]string{"b", "c,d", "e"}},
+			nil,
+		},
+		// Multi bytes
+		{
+			"v: あいうえお\nv2: かきくけこ\n",
+			map[string]string{"v": "あいうえお", "v2": "かきくけこ"},
+			nil,
+		},
+		{
+			"v: test\n",
+			TestTextUnmarshalerContainer{V: "test"},
+			nil,
+		},
+		{
+			"v: \"1\"\n",
+			TestTextUnmarshalerContainer{V: "1"},
+			nil,
+		},
+		{
+			"v: \"#\"\n",
+			TestTextUnmarshalerContainer{V: "#"},
+			nil,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
+	}
+}
+
+func TestEncodeTime(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
+		{
+			"2015-01-01T00:00:00Z: v\n",
+			map[time.Time]string{time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC): "v"},
+			nil,
+		},
+		{
+			"v: \"0001-01-01T00:00:00Z\"\n",
+			map[string]time.Time{"v": {}},
+			nil,
+		},
+		{
+			"v: \"0001-01-01T00:00:00Z\"\n",
+			map[string]*time.Time{"v": {}},
+			nil,
+		},
+		{
+			"v: null\n",
+			map[string]*time.Time{"v": nil},
+			nil,
+		},
+		{
+			"v: 30s\n",
+			map[string]time.Duration{"v": 30 * time.Second},
+			nil,
+		},
+		{
+			"v: 30s\n",
+			map[string]*time.Duration{"v": ptr(30 * time.Second)},
+			nil,
+		},
+		{
+			"v: null\n",
+			map[string]*time.Duration{"v": nil},
+			nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
+	}
+}
+
+func TestEncodeOmitEmpty(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
 		{
 			"a: 1\n",
 			struct {
@@ -573,19 +556,6 @@ func TestEncodeTable(t *testing.T) {
 			nil,
 		},
 		{
-			"a:\n  y: \"\"\n",
-			struct {
-				A *struct {
-					X string `yaml:"x,omitempty"`
-					Y string
-				}
-			}{&struct {
-				X string `yaml:"x,omitempty"`
-				Y string
-			}{}},
-			nil,
-		},
-		{
 			"a: {}\n",
 			struct {
 				A *struct {
@@ -598,6 +568,267 @@ func TestEncodeTable(t *testing.T) {
 			}{}},
 			nil,
 		},
+		{
+			"a: 1.0\n",
+			struct {
+				A float64 `yaml:"a,omitempty"`
+				B float64 `yaml:"b,omitempty"`
+			}{1, 0},
+			nil,
+		},
+		{
+			"a: 1\n",
+			struct {
+				A int
+				B []string `yaml:"b,omitempty"`
+			}{
+				1, []string{},
+			},
+			nil,
+		},
+		// Highlighting differences of go-yaml omitempty vs std encoding/json
+		// omitempty. Encoding/json will emit the following fields: https://go.dev/play/p/VvNpdM0GD4d
+		{
+			"{}\n",
+			struct {
+				// This type has a custom IsZero method.
+				A netip.Addr         `yaml:"a,omitempty"`
+				B struct{ X, y int } `yaml:"b,omitempty"`
+			}{},
+			nil,
+		},
+		{
+			"a: 1\n",
+			struct {
+				A int
+				B int `yaml:"b,omitempty"`
+			}{1, 0},
+			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
+		},
+		{
+			"{}\n",
+			struct {
+				A int
+				B int `yaml:"b,omitempty"`
+			}{0, 0},
+			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
+		},
+		{
+			"{}\n",
+			struct {
+				A netip.Addr         `yaml:"a"`
+				B struct{ X, y int } `yaml:"b"`
+			}{},
+			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
+	}
+}
+
+type zeroInt int
+
+func (z zeroInt) IsZero() bool {
+	return z < 2
+}
+
+func TestEncodeOmitZero(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
+		{
+			"a: 1\n",
+			struct {
+				A int `yaml:"a,omitzero"`
+				B int `yaml:"b,omitzero"`
+			}{1, 0},
+			nil,
+		},
+		{
+			"{}\n",
+			struct {
+				A int `yaml:"a,omitzero"`
+				B int `yaml:"b,omitzero"`
+			}{0, 0},
+			nil,
+		},
+		{
+			"a: {}\n",
+			struct {
+				A *struct {
+					X string `yaml:"x,omitzero"`
+					Y string `yaml:"y,omitzero"`
+				}
+			}{&struct {
+				X string `yaml:"x,omitzero"`
+				Y string `yaml:"y,omitzero"`
+			}{}},
+			nil,
+		},
+		{
+			"a: 1.0\n",
+			struct {
+				A float64 `yaml:"a,omitzero"`
+				B float64 `yaml:"b,omitzero"`
+			}{1, 0},
+			nil,
+		},
+		{
+			"a: 1\nb: []\n",
+			struct {
+				A int
+				B []string `yaml:"b,omitzero"`
+			}{
+				1, []string{},
+			},
+			nil,
+		},
+		{
+			"{}\n",
+			struct {
+				A netip.Addr         `yaml:"a,omitzero"`
+				B struct{ X, y int } `yaml:"b,omitzero"`
+			}{},
+			nil,
+		},
+		{
+			"a: 1\n",
+			struct {
+				A int
+				B int
+			}{1, 0},
+			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
+		},
+		{
+			"{}\n",
+			struct {
+				A int
+				B int
+			}{0, 0},
+			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
+		},
+		{
+			"{}\n",
+			struct {
+				A netip.Addr         `yaml:"a"`
+				B struct{ X, y int } `yaml:"b"`
+			}{},
+			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
+		},
+		{
+			"a: 1\n",
+			struct {
+				A int     `yaml:"a,omitzero"`
+				B zeroInt `yaml:"b,omitzero"`
+			}{1, 1},
+			nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
+	}
+}
+
+func TestEncodeMultilineString(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
+		{
+			"hello: |\n  hello\n  world\n",
+			map[string]string{"hello": "hello\nworld\n"},
+			nil,
+		},
+		{
+			"hello: |-\n  hello\n  world\n",
+			map[string]string{"hello": "hello\nworld"},
+			nil,
+		},
+		{
+			"hello: |+\n  hello\n  world\n\n",
+			map[string]string{"hello": "hello\nworld\n\n"},
+			nil,
+		},
+		{
+			"hello:\n  hello: |\n    hello\n    world\n",
+			map[string]map[string]string{"hello": {"hello": "hello\nworld\n"}},
+			nil,
+		},
+		{
+			"hello: |\r  hello\r  world\n",
+			map[string]string{"hello": "hello\rworld\r"},
+			nil,
+		},
+		{
+			"hello: |\r\n  hello\r\n  world\n",
+			map[string]string{"hello": "hello\r\nworld\r\n"},
+			nil,
+		},
+		{
+			"v: |-\n  username: hello\n  password: hello123\n",
+			map[string]any{"v": "username: hello\npassword: hello123"},
+			func(e *Encoder) *Encoder { return e.WithLiteralMultilineStyle(true) },
+		},
+		{
+			"v: |-\n  # comment\n  username: hello\n  password: hello123\n",
+			map[string]any{"v": "# comment\nusername: hello\npassword: hello123"},
+			func(e *Encoder) *Encoder { return e.WithLiteralMultilineStyle(true) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
+	}
+}
+
+func TestEncodeFlow(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
 		{
 			"a: {x: 1}\n",
 			struct {
@@ -634,78 +865,6 @@ func TestEncodeTable(t *testing.T) {
 		// 	nil,
 		// },
 		{
-			"a: 1.0\n",
-			struct {
-				A float64 `yaml:"a,omitempty"`
-				B float64 `yaml:"b,omitempty"`
-			}{1, 0},
-			nil,
-		},
-		{
-			"a: 1\n",
-			struct {
-				A int
-				B []string `yaml:"b,omitempty"`
-			}{
-				1, []string{},
-			},
-			nil,
-		},
-		// Highlighting differences of go-yaml omitempty vs std encoding/json
-		// omitempty. Encoding/json will emit the following fields: https://go.dev/play/p/VvNpdM0GD4d
-		{
-			"{}\n",
-			struct {
-				// This type has a custom IsZero method.
-				A netip.Addr         `yaml:"a,omitempty"`
-				B struct{ X, y int } `yaml:"b,omitempty"`
-			}{},
-			nil,
-		},
-		// omitzero flag.
-		{
-			"a: 1\n",
-			struct {
-				A int `yaml:"a,omitzero"`
-				B int `yaml:"b,omitzero"`
-			}{1, 0},
-			nil,
-		},
-		{
-			"{}\n",
-			struct {
-				A int `yaml:"a,omitzero"`
-				B int `yaml:"b,omitzero"`
-			}{0, 0},
-			nil,
-		},
-		{
-			"a:\n  y: \"\"\n",
-			struct {
-				A *struct {
-					X string `yaml:"x,omitzero"`
-					Y string
-				}
-			}{&struct {
-				X string `yaml:"x,omitzero"`
-				Y string
-			}{}},
-			nil,
-		},
-		{
-			"a: {}\n",
-			struct {
-				A *struct {
-					X string `yaml:"x,omitzero"`
-					Y string `yaml:"y,omitzero"`
-				}
-			}{&struct {
-				X string `yaml:"x,omitzero"`
-				Y string `yaml:"y,omitzero"`
-			}{}},
-			nil,
-		},
-		{
 			"a: {x: 1}\n",
 			struct {
 				A *struct{ X, y int } `yaml:"a,omitzero,flow"`
@@ -740,84 +899,6 @@ func TestEncodeTable(t *testing.T) {
 		// 	}{struct{ X, y int }{0, 1}},
 		// 	nil,
 		// },
-		{
-			"a: 1.0\n",
-			struct {
-				A float64 `yaml:"a,omitzero"`
-				B float64 `yaml:"b,omitzero"`
-			}{1, 0},
-			nil,
-		},
-		{
-			"a: 1\nb: []\n",
-			struct {
-				A int
-				B []string `yaml:"b,omitzero"`
-			}{
-				1, []string{},
-			},
-			nil,
-		},
-		{
-			"{}\n",
-			struct {
-				A netip.Addr         `yaml:"a,omitzero"`
-				B struct{ X, y int } `yaml:"b,omitzero"`
-			}{},
-			nil,
-		},
-		// OmitEmpty global option.
-		{
-			"a: 1\n",
-			struct {
-				A int
-				B int `yaml:"b,omitempty"`
-			}{1, 0},
-			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
-		},
-		{
-			"{}\n",
-			struct {
-				A int
-				B int `yaml:"b,omitempty"`
-			}{0, 0},
-			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
-		},
-		{
-			"{}\n",
-			struct {
-				A netip.Addr         `yaml:"a"`
-				B struct{ X, y int } `yaml:"b"`
-			}{},
-			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
-		},
-		// OmitZero global option.
-		{
-			"a: 1\n",
-			struct {
-				A int
-				B int
-			}{1, 0},
-			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
-		},
-		{
-			"{}\n",
-			struct {
-				A int
-				B int
-			}{0, 0},
-			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
-		},
-		{
-			"{}\n",
-			struct {
-				A netip.Addr         `yaml:"a"`
-				B struct{ X, y int } `yaml:"b"`
-			}{},
-			func(e *Encoder) *Encoder { return e.WithOmitZero(true) },
-		},
-
-		// Flow flag.
 		{
 			"a: [1, 2]\n",
 			struct {
@@ -877,14 +958,6 @@ func TestEncodeTable(t *testing.T) {
 			}{[]string{"b", "c'", "d"}},
 			func(e *Encoder) *Encoder { return e.WithSingleQuote(false) },
 		},
-		// No quoting in non-flow mode
-		{
-			"a:\n- b\n- c,d\n- e\n",
-			struct {
-				A []string `yaml:"a"`
-			}{[]string{"b", "c,d", "e"}},
-			nil,
-		},
 		{
 			`a: [b, "c]", d]` + "\n",
 			struct {
@@ -913,59 +986,8 @@ func TestEncodeTable(t *testing.T) {
 			}{[]string{"b", "c'", "d"}},
 			nil,
 		},
-		// Multi bytes
-		{
-			"v: あいうえお\nv2: かきくけこ\n",
-			map[string]string{"v": "あいうえお", "v2": "かきくけこ"},
-			nil,
-		},
-		// time value
-		{
-			"v: \"0001-01-01T00:00:00Z\"\n",
-			map[string]time.Time{"v": {}},
-			nil,
-		},
-		{
-			"v: \"0001-01-01T00:00:00Z\"\n",
-			map[string]*time.Time{"v": {}},
-			nil,
-		},
-		{
-			"v: null\n",
-			map[string]*time.Time{"v": nil},
-			nil,
-		},
-		{
-			"v: 30s\n",
-			map[string]time.Duration{"v": 30 * time.Second},
-			nil,
-		},
-		{
-			"v: 30s\n",
-			map[string]*time.Duration{"v": ptr(30 * time.Second)},
-			nil,
-		},
-		{
-			"v: null\n",
-			map[string]*time.Duration{"v": nil},
-			nil,
-		},
-		{
-			"v: test\n",
-			TestTextUnmarshalerContainer{V: "test"},
-			nil,
-		},
-		{
-			"v: \"1\"\n",
-			TestTextUnmarshalerContainer{V: "1"},
-			nil,
-		},
-		{
-			"v: \"#\"\n",
-			TestTextUnmarshalerContainer{V: "#"},
-			nil,
-		},
 	}
+
 	for _, test := range tests {
 		t.Run(test.source, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -992,13 +1014,13 @@ func TestEncodeStructIncludeMap(t *testing.T) {
 	}
 	bytes, err := Marshal(T{
 		A: U{
-			M: map[string]string{"x": "y"},
+			M: map[string]string{"x": "z"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "a:\n  m:\n    x: \"y\"\n"
+	expect := "a:\n  m:\n    x: z\n"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1104,12 +1126,12 @@ func TestEncodeDefinedTypeKeyMap(t *testing.T) {
 		M map[K]string
 	}
 	bytes, err := Marshal(U{
-		M: map[K]string{K("x"): "y"},
+		M: map[K]string{K("x"): "z"},
 	})
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "m:\n  x: \"y\"\n"
+	expect := "m:\n  x: z\n"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1450,18 +1472,31 @@ func (t *tMarshal) MarshalYAML() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 func Test_Marshaler(t *testing.T) {
-	const expected = "tags:\n- hello-world\n"
+	t.Run("custom marshaler", func(t *testing.T) {
+		const expected = "tags:\n- hello-world\n"
 
-	buf, err := Marshal(&tMarshal{"hello-world"})
-	if err != nil {
-		t.Fatalf("failed to marshal: %s", err)
-	}
+		buf, err := Marshal(&tMarshal{"hello-world"})
+		if err != nil {
+			t.Fatalf("failed to marshal: %s", err)
+		}
 
-	if string(buf) != expected {
-		t.Fatalf("expected [%s], got [%s]", expected, buf)
-	}
+		if string(buf) != expected {
+			t.Fatalf("expected [%s], got [%s]", expected, buf)
+		}
+	})
 
-	t.Logf("%s", buf)
+	t.Run("custom nil marshaler", func(t *testing.T) {
+		const expected = "null\n"
+
+		buf, err := Marshal((*tMarshal)(nil))
+		if err != nil {
+			t.Fatalf("failed to marshal: %s", err)
+		}
+
+		if string(buf) != expected {
+			t.Fatalf("expected [%s], got [%s]", expected, buf)
+		}
+	})
 }
 
 func TestMarshalIndentWithMultipleText(t *testing.T) {
@@ -1562,38 +1597,107 @@ a:
 	}
 }
 
-func TestEncodeWithMerge(t *testing.T) {
-	type Person struct {
-		*Person `yaml:",omitempty,inline"`
-		Name    string `yaml:",omitempty"`
-		Age     int    `yaml:",omitempty"`
+type badMarshaler struct{}
+
+func (b *badMarshaler) MarshalYAML() ([]byte, error) {
+	return nil, errors.New("bad marshaler error")
+}
+
+func TestBadMarshaler(t *testing.T) {
+	_, err := Marshal(map[string]any{
+		"v": &badMarshaler{},
+	})
+	if err == nil {
+		t.Fatal("expected non nil error")
 	}
-	defaultPerson := &Person{
-		Name: "John Smith",
-		Age:  20,
-	}
-	people := []*Person{
-		{
-			Person: defaultPerson,
-			Name:   "Ken",
-			Age:    10,
-		},
-		{
-			Person: defaultPerson,
-		},
-	}
-	var doc struct {
-		Default *Person   `yaml:"default,anchor"`
-		People  []*Person `yaml:"people"`
-	}
-	doc.Default = defaultPerson
-	doc.People = people
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	if err := enc.Encode(doc); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `default: &default
+}
+
+type valueMarshaler struct{}
+
+func (v valueMarshaler) MarshalYAML() ([]byte, error) {
+	return []byte("value"), nil
+}
+
+func TestValueMarshaler(t *testing.T) {
+	t.Run("custom pointer marshal", func(t *testing.T) {
+		b, err := Marshal(map[string]any{
+			"v": &valueMarshaler{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(b)
+		expected := "v: value\n"
+		if got != expected {
+			t.Fatalf("expected [%s] got [%s]", expected, got)
+		}
+	})
+	t.Run("custom value marshal", func(t *testing.T) {
+		b, err := Marshal(map[string]any{
+			"v": valueMarshaler{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(b)
+		expected := "v: value\n"
+		if got != expected {
+			t.Fatalf("expected [%s] got [%s]", expected, got)
+		}
+	})
+	t.Run("custom value marshal in struct", func(t *testing.T) {
+		type T struct {
+			V  valueMarshaler
+			VP *valueMarshaler
+		}
+		b, err := Marshal(T{
+			V:  valueMarshaler{},
+			VP: &valueMarshaler{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(b)
+		expected := "v: value\nvp: value\n"
+		if got != expected {
+			t.Fatalf("expected [%s] got [%s]", expected, got)
+		}
+	})
+}
+
+func TestEncodeAnchors(t *testing.T) {
+	t.Run("anchor with merge", func(t *testing.T) {
+		type Person struct {
+			*Person `yaml:",omitempty"`
+			Name    string `yaml:",omitempty"`
+			Age     int    `yaml:",omitempty"`
+		}
+		defaultPerson := &Person{
+			Name: "John Smith",
+			Age:  20,
+		}
+		people := []*Person{
+			{
+				Person: defaultPerson,
+				Name:   "Ken",
+				Age:    10,
+			},
+			{
+				Person: defaultPerson,
+			},
+		}
+		var doc struct {
+			Default *Person   `yaml:"default,anchor"`
+			People  []*Person `yaml:"people"`
+		}
+		doc.Default = defaultPerson
+		doc.People = people
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default
   name: John Smith
   age: 20
 people:
@@ -1602,54 +1706,54 @@ people:
   age: 10
 - <<: *default
 `
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
-	}
-}
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 
-func TestEncodeWithAnchorAndAlias(t *testing.T) {
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	type T struct {
-		A int
-		B string
-	}
-	var v struct {
-		A *T `yaml:"a,anchor=c"`
-		B *T `yaml:"b,alias=c"`
-	}
-	v.A = &T{A: 1, B: "hello"}
-	v.B = v.A
-	if err := enc.Encode(v); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := "a: &c\n  a: 1\n  b: hello\nb: *c\n"
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
-	}
-}
+	t.Run("anchor and alias", func(t *testing.T) {
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		type T struct {
+			A int
+			B string
+		}
+		var v struct {
+			A *T `yaml:"a,anchor=c"`
+			B *T `yaml:"b,alias=c"`
+		}
+		v.A = &T{A: 1, B: "hello"}
+		v.B = v.A
+		if err := enc.Encode(v); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "a: &c\n  a: 1\n  b: hello\nb: *c\n"
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 
-func TestEncodeWithAutoAlias(t *testing.T) {
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	type T struct {
-		I int
-		S string
-	}
-	var v struct {
-		A *T `yaml:"a,anchor=a"`
-		B *T `yaml:"b,anchor=b"`
-		C *T `yaml:"c"`
-		D *T `yaml:"d"`
-	}
-	v.A = &T{I: 1, S: "hello"}
-	v.B = &T{I: 2, S: "world"}
-	v.C = v.A
-	v.D = v.B
-	if err := enc.Encode(v); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `a: &a
+	t.Run("anchor with auto alias", func(t *testing.T) {
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		type T struct {
+			I int
+			S string
+		}
+		var v struct {
+			A *T `yaml:"a,anchor=a"`
+			B *T `yaml:"b,anchor=b"`
+			C *T `yaml:"c"`
+			D *T `yaml:"d"`
+		}
+		v.A = &T{I: 1, S: "hello"}
+		v.B = &T{I: 2, S: "world"}
+		v.C = v.A
+		v.D = v.B
+		if err := enc.Encode(v); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `a: &a
   i: 1
   s: hello
 b: &b
@@ -1658,32 +1762,32 @@ b: &b
 c: *a
 d: *b
 `
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
-	}
-}
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 
-func TestEncodeWithImplicitAnchorAndAlias(t *testing.T) {
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	type T struct {
-		I int
-		S string
-	}
-	var v struct {
-		A *T `yaml:"a,anchor"`
-		B *T `yaml:"b,anchor"`
-		C *T `yaml:"c"`
-		D *T `yaml:"d"`
-	}
-	v.A = &T{I: 1, S: "hello"}
-	v.B = &T{I: 2, S: "world"}
-	v.C = v.A
-	v.D = v.B
-	if err := enc.Encode(v); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `a: &a
+	t.Run("implicit anchor and alias", func(t *testing.T) {
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		type T struct {
+			I int
+			S string
+		}
+		var v struct {
+			A *T `yaml:"a,anchor"`
+			B *T `yaml:"b,anchor"`
+			C *T `yaml:"c"`
+			D *T `yaml:"d"`
+		}
+		v.A = &T{I: 1, S: "hello"}
+		v.B = &T{I: 2, S: "world"}
+		v.C = v.A
+		v.D = v.B
+		if err := enc.Encode(v); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `a: &a
   i: 1
   s: hello
 b: &b
@@ -1692,57 +1796,57 @@ b: &b
 c: *a
 d: *b
 `
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
-	}
-}
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 
-func TestEncoder_MarshalAnchorUnique(t *testing.T) {
-	type Host struct {
-		Hostname string
-		Username string
-		Password string
-	}
-	type HostDecl struct {
-		Host *Host `yaml:",anchor"`
-	}
-	type Queue struct {
-		Name string `yaml:","`
-		*Host
-	}
-	var doc struct {
-		Hosts  []*HostDecl `yaml:"hosts"`
-		Queues []*Queue    `yaml:"queues"`
-	}
-	host1 := &Host{
-		Hostname: "host1.example.com",
-		Username: "userA",
-		Password: "pass1",
-	}
-	host2 := &Host{
-		Hostname: "host2.example.com",
-		Username: "userB",
-		Password: "pass2",
-	}
-	doc.Hosts = []*HostDecl{
-		{Host: host1},
-		{Host: host2},
-	}
-	doc.Queues = []*Queue{
-		{
-			Name: "queue",
-			Host: host1,
-		}, {
-			Name: "queue2",
-			Host: host2,
-		},
-	}
+	t.Run("make unique anchors", func(t *testing.T) {
+		type Host struct {
+			Hostname string
+			Username string
+			Password string
+		}
+		type HostDecl struct {
+			Host *Host `yaml:",anchor"`
+		}
+		type Queue struct {
+			Name string `yaml:","`
+			*Host
+		}
+		var doc struct {
+			Hosts  []*HostDecl `yaml:"hosts"`
+			Queues []*Queue    `yaml:"queues"`
+		}
+		host1 := &Host{
+			Hostname: "host1.example.com",
+			Username: "userA",
+			Password: "pass1",
+		}
+		host2 := &Host{
+			Hostname: "host2.example.com",
+			Username: "userB",
+			Password: "pass2",
+		}
+		doc.Hosts = []*HostDecl{
+			{Host: host1},
+			{Host: host2},
+		}
+		doc.Queues = []*Queue{
+			{
+				Name: "queue",
+				Host: host1,
+			}, {
+				Name: "queue2",
+				Host: host2,
+			},
+		}
 
-	var buf bytes.Buffer
-	if err := NewEncoder(&buf).Encode(doc); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `hosts:
+		var buf bytes.Buffer
+		if err := NewEncoder(&buf).Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `hosts:
 - host: &host
     hostname: host1.example.com
     username: userA
@@ -1757,40 +1861,40 @@ queues:
 - name: queue2
   host: *host1
 `
-	got := buf.String()
-	if got != expect {
-		t.Fatalf("expect: [%s], actual: [%s]", expect, got)
-	}
-}
+		got := buf.String()
+		if got != expect {
+			t.Fatalf("expect: [%s], actual: [%s]", expect, got)
+		}
+	})
 
-func TestEncodeAnchorSlice(t *testing.T) {
-	type Person struct {
-		//*Person `yaml:",omitempty,inline"`
-		Name string `yaml:",omitempty"`
-		Age  int    `yaml:",omitempty"`
-	}
-	defaultPeople := []Person{
-		{Name: "John Smith", Age: 20},
-		{Name: "Mary White", Age: 25},
-	}
-	people := []Person{
-		{Name: "Ken", Age: 10},
-		{Name: "Ben", Age: 12},
-	}
-	var doc struct {
-		Default []Person `yaml:"default,anchor"`
-		People  []Person `yaml:"people"`
-		Staff   []Person `yaml:","`
-	}
-	doc.Default = defaultPeople
-	doc.People = people
-	doc.Staff = defaultPeople
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	if err := enc.Encode(doc); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `default: &default
+	t.Run("anchoring the slice", func(t *testing.T) {
+		type Person struct {
+			//*Person `yaml:",omitempty"`
+			Name string `yaml:",omitempty"`
+			Age  int    `yaml:",omitempty"`
+		}
+		defaultPeople := []Person{
+			{Name: "John Smith", Age: 20},
+			{Name: "Mary White", Age: 25},
+		}
+		people := []Person{
+			{Name: "Ken", Age: 10},
+			{Name: "Ben", Age: 12},
+		}
+		var doc struct {
+			Default []Person `yaml:"default,anchor"`
+			People  []Person `yaml:"people"`
+			Staff   []Person `yaml:","`
+		}
+		doc.Default = defaultPeople
+		doc.People = people
+		doc.Staff = defaultPeople
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default
 - name: John Smith
   age: 20
 - name: Mary White
@@ -1802,33 +1906,33 @@ people:
   age: 12
 staff: *default
 `
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
-	}
-}
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 
-func TestEncodeAnchorMap(t *testing.T) {
-	type Person struct {
-		//*Person `yaml:",omitempty,inline"`
-		Name string `yaml:",omitempty"`
-		Age  int    `yaml:",omitempty"`
-	}
-	defaultPeople := map[string]Person{
-		"husband": {Name: "John Smith", Age: 20},
-		"wife":    {Name: "Mary White", Age: 25},
-	}
-	var doc struct {
-		Default map[string]Person `yaml:"default,anchor"`
-		Staff   map[string]Person `yaml:","`
-	}
-	doc.Default = defaultPeople
-	doc.Staff = defaultPeople
-	var buf bytes.Buffer
-	enc := NewEncoder(&buf)
-	if err := enc.Encode(doc); err != nil {
-		t.Fatalf("%+v", err)
-	}
-	expect := `default: &default
+	t.Run("anchoring the map", func(t *testing.T) {
+		type Person struct {
+			//*Person `yaml:",omitempty"`
+			Name string `yaml:",omitempty"`
+			Age  int    `yaml:",omitempty"`
+		}
+		defaultPeople := map[string]Person{
+			"husband": {Name: "John Smith", Age: 20},
+			"wife":    {Name: "Mary White", Age: 25},
+		}
+		var doc struct {
+			Default map[string]Person `yaml:"default,anchor"`
+			Staff   map[string]Person `yaml:","`
+		}
+		doc.Default = defaultPeople
+		doc.Staff = defaultPeople
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default
   husband:
     name: John Smith
     age: 20
@@ -1837,8 +1941,285 @@ func TestEncodeAnchorMap(t *testing.T) {
     age: 25
 staff: *default
 `
-	if expect != buf.String() {
-		t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
+
+	t.Run("anchors with aliases inside flow slice", func(t *testing.T) {
+		type Person struct {
+			*Person `yaml:",omitempty"`
+			Name    string `yaml:",omitempty"`
+			Age     int    `yaml:",omitempty"`
+		}
+		defaultPerson := &Person{Name: "John Smith", Age: 20}
+		people := []*Person{
+			{
+				Person: defaultPerson,
+				Name:   "Ken",
+				Age:    10,
+			},
+			{
+				Person: defaultPerson,
+			},
+		}
+		var doc struct {
+			Default *Person   `yaml:"default,anchor"`
+			People  []*Person `yaml:"people,flow"`
+		}
+		doc.Default = defaultPerson
+		doc.People = people
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default
+  name: John Smith
+  age: 20
+people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
+`
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
+
+	t.Run("anchors with flow", func(t *testing.T) {
+		type Person struct {
+			*Person `yaml:",omitempty"`
+			Name    string `yaml:",omitempty"`
+			Age     int    `yaml:",omitempty"`
+		}
+		defaultPerson := &Person{Name: "John Smith", Age: 20}
+		people := []*Person{
+			{
+				Person: defaultPerson,
+				Name:   "Ken",
+				Age:    10,
+			},
+			{
+				Person: defaultPerson,
+			},
+		}
+		var doc struct {
+			Default *Person   `yaml:"default,anchor,flow"`
+			People  []*Person `yaml:"people,flow"`
+		}
+		doc.Default = defaultPerson
+		doc.People = people
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default {name: John Smith, age: 20}
+people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
+`
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
+
+	t.Run("anchors with global flow", func(t *testing.T) {
+		type Person struct {
+			*Person `yaml:",omitempty"`
+			Name    string `yaml:",omitempty"`
+			Age     int    `yaml:",omitempty"`
+		}
+		defaultPerson := &Person{Name: "John Smith", Age: 20}
+		people := []*Person{
+			{
+				Person: defaultPerson,
+				Name:   "Ken",
+				Age:    10,
+			},
+			{
+				Person: defaultPerson,
+			},
+		}
+		var doc struct {
+			Default *Person   `yaml:"default,anchor"`
+			People  []*Person `yaml:"people"`
+		}
+		doc.Default = defaultPerson
+		doc.People = people
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf).WithFlowStyle(true)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `{default: &default {name: John Smith, age: 20}, people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]}
+`
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
+}
+
+func TestEncodeQuoted(t *testing.T) {
+	tests := []struct {
+		source  string
+		value   any
+		options func(*Encoder) *Encoder
+	}{
+		{
+			"v: \"true\"\n",
+			map[string]string{"v": "true"},
+			nil,
+		},
+		{
+			"v: \"false\"\n",
+			map[string]string{"v": "false"},
+			nil,
+		},
+		{
+			"v: \".inf\"\n",
+			map[string]string{"v": ".inf"},
+			nil,
+		},
+		{
+			"v: \".nan\"\n",
+			map[string]string{"v": ".nan"},
+			nil,
+		},
+		{
+			"v: \"Null\"\n",
+			map[string]string{"v": "Null"},
+			nil,
+		},
+		{
+			"v: \"\"\n",
+			map[string]string{"v": ""},
+			nil,
+		},
+		{
+			"v: \"{abc}\"\n",
+			map[string]string{"v": "{abc}"},
+			nil,
+		},
+		{
+			"v: \"[abc]\"\n",
+			map[string]string{"v": "[abc]"},
+			nil,
+		},
+		{
+			"v: 'true'\n",
+			map[string]string{"v": "true"},
+			func(e *Encoder) *Encoder { return e.WithSingleQuote(true) },
+		},
+		{
+			"a: \"-\"\n",
+			map[string]string{"a": "-"},
+			nil,
+		},
+		{
+			"t2: \"2018-01-09T10:40:47Z\"\nt4: \"2098-01-09T10:40:47Z\"\n",
+			map[string]string{
+				"t2": "2018-01-09T10:40:47Z",
+				"t4": "2098-01-09T10:40:47Z",
+			},
+			nil,
+		},
+		{
+			"a: \"1:1\"\n",
+			map[string]string{"a": "1:1"},
+			nil,
+		},
+		{
+			"a: \"b: c\"\n",
+			map[string]string{"a": "b: c"},
+			nil,
+		},
+		{
+			"a: \"Hello #comment\"\n",
+			map[string]string{"a": "Hello #comment"},
+			nil,
+		},
+		{
+			"a: \" b\"\n",
+			map[string]string{"a": " b"},
+			nil,
+		},
+		{
+			"a: \"b \"\n",
+			map[string]string{"a": "b "},
+			nil,
+		},
+		{
+			"a: \" b \"\n",
+			map[string]string{"a": " b "},
+			nil,
+		},
+		{
+			"a: \"`b` c\"\n",
+			map[string]string{"a": "`b` c"},
+			nil,
+		},
+		{
+			"a: \"\\\\0\"\n",
+			map[string]string{"a": "\\0"},
+			nil,
+		},
+		{
+			"a: \"\"\n",
+			struct {
+				A string
+			}{
+				"",
+			},
+			nil,
+		},
+		{
+			"a: \"\"\n",
+			struct {
+				A *string
+			}{
+				&emptyStr,
+			},
+			nil,
+		},
+		{
+			"a:\n  y: \"\"\n",
+			struct {
+				A *struct {
+					X string `yaml:"x,omitempty"`
+					Y string
+				}
+			}{&struct {
+				X string `yaml:"x,omitempty"`
+				Y string
+			}{}},
+			nil,
+		},
+		{
+			"a:\n  y: \"\"\n",
+			struct {
+				A *struct {
+					X string `yaml:"x,omitzero"`
+					Y string
+				}
+			}{&struct {
+				X string `yaml:"x,omitzero"`
+				Y string
+			}{}},
+			nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf)
+			if test.options != nil {
+				enc = test.options(enc)
+			}
+			if err := enc.Encode(test.value); err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if test.source != buf.String() {
+				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
+			}
+		})
 	}
 }
 
@@ -1909,18 +2290,224 @@ func TestIssue259(t *testing.T) {
 }
 
 func TestEncodeSliceOfSlices(t *testing.T) {
-	bytes, err := Marshal([][]int{
-		{1, 2},
-		{4, 6},
+	t.Run("slice of slices", func(t *testing.T) {
+		bytes, err := Marshal([][]int{
+			{1, 2},
+			{4, 6},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "- - 1\n  - 2\n- - 4\n  - 6\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
 	})
-	if err != nil {
-		t.Fatalf("%+v", err)
+	t.Run("slice of slices of slices", func(t *testing.T) {
+		bytes, err := Marshal([][][]int{
+			{{1, 2}, {3, 4}},
+			{{5, 6}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "- - - 1\n    - 2\n  - - 3\n    - 4\n- - - 5\n    - 6\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+	t.Run("slice of slices of structs", func(t *testing.T) {
+		type T struct {
+			A int
+			B int
+		}
+		bytes, err := Marshal([][]T{
+			{{1, 2}, {3, 4}},
+			{{4, 6}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "- - a: 1\n    b: 2\n  - a: 3\n    b: 4\n- - a: 4\n    b: 6\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+	t.Run("slice of slices of maps", func(t *testing.T) {
+		bytes, err := Marshal([][]map[string]int{
+			{{"a": 1, "b": 2}, {"c": 3}},
+			{{"d": 4}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "- - a: 1\n    b: 2\n  - c: 3\n- - d: 4\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+	t.Run("map of slices of slices", func(t *testing.T) {
+		bytes, err := Marshal(map[string][][]int{
+			"a": {{1, 2}, {4, 6}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+	t.Run("struct of slices of slices", func(t *testing.T) {
+		type T struct {
+			A [][]int
+		}
+		bytes, err := Marshal(T{
+			A: [][]int{{1, 2}, {4, 6}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+}
+
+func TestEncodeStructOfStruct(t *testing.T) {
+	t.Run("struct of struct", func(t *testing.T) {
+		type V struct {
+			A int
+			B int
+		}
+		type T struct {
+			Vi V
+		}
+		bytes, err := Marshal(T{
+			Vi: V{1, 2},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "vi:\n  a: 1\n  b: 2\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+	t.Run("struct of struct of struct", func(t *testing.T) {
+		type S struct {
+			A int
+			B int
+		}
+		type V struct {
+			Si S
+		}
+		type T struct {
+			Vi V
+		}
+		bytes, err := Marshal(T{
+			Vi: V{Si: S{1, 2}},
+		})
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := "vi:\n  si:\n    a: 1\n    b: 2\n"
+		actual := string(bytes)
+		if actual != expect {
+			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+		}
+	})
+}
+
+func TestEncodeWrongIndent(t *testing.T) {
+	type indentTest struct {
+		indent   int
+		hasError bool
 	}
-	//TODO: add a new bit to nestedState (first) noLineBreak & use it accordingly
-	//for nested slices
-	expect := "- - 1\n  - 2\n- - 4\n  - 6\n"
-	actual := string(bytes)
-	if actual != expect {
-		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
+	indents := []indentTest{
+		{-2, true},
+		{-1, true},
+		{0, true},
+		{1, true},
+		{2, false},
 	}
+	var buf bytes.Buffer
+
+	for _, ind := range indents {
+		enc := NewEncoder(&buf).WithIndent(ind.indent)
+		err := enc.Encode("a")
+		if ind.hasError && err == nil || !ind.hasError && err != nil {
+			t.Fatalf("expected error result for indent: %d", ind.indent)
+		}
+		buf.Reset()
+	}
+}
+
+func BenchmarkIsReserved(b *testing.B) {
+	const count = 1000
+	strs := make([]string, 0, count+len(reservedNullKeywords)+len(reservedBoolKeywords)+len(reservedInfKeywords)+len(reservedNanKeywords)+len(reservedMiscKeywords))
+	for i := range count {
+		strs = append(strs, strings.Repeat("a", i+1))
+	}
+	reservedSlice := append([]string{}, reservedNullKeywords...)
+	reservedSlice = append(reservedSlice, reservedBoolKeywords...)
+	reservedSlice = append(reservedSlice, reservedInfKeywords...)
+	reservedSlice = append(reservedSlice, reservedNanKeywords...)
+	reservedSlice = append(reservedSlice, reservedMiscKeywords...)
+	strs = append(strs, reservedSlice...)
+
+	isReservedOld := func(s string) bool {
+		return slices.Contains(reservedNullKeywords, s) || slices.Contains(reservedBoolKeywords, s) || slices.Contains(reservedInfKeywords, s) || slices.Contains(reservedNanKeywords, s) || slices.Contains(reservedMiscKeywords, s)
+	}
+	isReservedSlice := func(s string) bool {
+		if len(s) > maxReservedLength {
+			return false
+		}
+		return slices.Contains(reservedSlice, s)
+	}
+
+	b.Run("new isReserved", func(b *testing.B) {
+		check := func() {
+			for i := range strs {
+				_ = isReserved(strs[i])
+			}
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			check()
+		}
+	})
+
+	b.Run("slice isReserved", func(b *testing.B) {
+		check := func() {
+			for i := range strs {
+				_ = isReservedSlice(strs[i])
+			}
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			check()
+		}
+	})
+
+	b.Run("old isReserved", func(b *testing.B) {
+		check := func() {
+			for i := range strs {
+				_ = isReservedOld(strs[i])
+			}
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			check()
+		}
+	})
+
 }

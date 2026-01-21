@@ -56,8 +56,6 @@ import (
 	"time"
 	"unicode"
 	_ "unsafe" // for linkname
-
-	"github.com/denisbakhtin/gyaml/token"
 )
 
 // Marshal returns the YAML encoding of v.
@@ -520,7 +518,7 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptions, 
 	}
 	s := string(mt)
 	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
-	if isReserved(s) || token.IsNeedQuoted(s) {
+	if isNeedQuoted(s) {
 		e.Write(strconv.AppendQuote(b, s))
 		return
 	}
@@ -541,6 +539,18 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, opts encoderOptio
 	e.Write(b)
 }
 
+// a helper function to create slice indents with one '-' and spaces
+func indent(level, indentNum int, isSlice bool) []byte {
+	if level <= 0 {
+		return nil
+	}
+	indent := bytes.Repeat([]byte{' '}, level*indentNum)
+	if isSlice {
+		indent[len(indent)-2] = '-'
+	}
+	return indent
+}
+
 // TODO: optimize?
 // TODO: remove opts & use only level + indentNum - or use a stripped options type
 // TODO: remove isScalar, it intersects with opts.isFlowStyle?
@@ -553,15 +563,8 @@ func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState
 			if opts.isFlowStyle {
 				return dst
 			}
-			//just add one indent? xD
-			if opts.indentSequence {
-				// opts.level++
-			}
 			dst = append(dst, '\n')
-			//opts.level should always be > 0, indentNum > 1
-			indent := bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
-			indent[len(indent)-2] = '-'
-			return append(dst, indent...)
+			return append(dst, indent(opts.level, opts.indentNum, true)...)
 		}
 		if ns != 0 {
 			return append(dst, ' ')
@@ -569,12 +572,7 @@ func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState
 	} else {
 		if ns != 0 {
 			dst = append(dst, '\n')
-			//opts.level should always be > 0, indentNum > 1
-			indent := bytes.Repeat([]byte{' '}, opts.level*opts.indentNum)
-			if ns&inSlice != 0 {
-				indent[len(indent)-2] = '-'
-			}
-			return append(dst, indent...)
+			return append(dst, indent(opts.level, opts.indentNum, ns&inSlice != 0)...)
 		}
 		dst = append(dst, '\n')
 	}
@@ -650,8 +648,8 @@ var (
 	float64Encoder = (floatEncoder(64)).encode
 )
 
-// isNeedQuoted checks whether the value needs quote for passed string or not
-func isNeedQuoted(value string, opts encoderOptions) bool {
+// isNeedQuotedOpts checks whether the value needs quote for passed string or not
+func isNeedQuotedOpts(value string, opts encoderOptions) bool {
 	if opts.isJSONStyle {
 		return true
 	}
@@ -673,7 +671,7 @@ func isNeedQuoted(value string, opts encoderOptions) bool {
 		}
 	}
 
-	return token.IsNeedQuoted(value)
+	return isNeedQuoted(value)
 }
 
 func quoteString(_ *encodeState, s string, opts encoderOptions) string {
@@ -687,16 +685,16 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 	s := v.String()
 	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 
-	if isReserved(s) || isNeedQuoted(s, opts) {
+	if isNeedQuotedOpts(s, opts) {
 		e.Write(appendString(b, quoteString(e, s, opts)))
 		return
 	}
 
-	lbc := token.DetectLineBreakCharacter(s)
+	lbc := detectLineBreakCharacter(s)
 	if strings.Contains(s, lbc) {
 		// This block assumes that the line breaks in this inside scalar content and the Outside scalar content are the same.
 		// It works mostly, but inconsistencies occur if line break characters are mixed.
-		header := token.LiteralBlockHeader(s)
+		header := literalBlockHeader(s)
 		if ns&inSlice == 0 {
 			opts.level++
 		}
@@ -709,9 +707,6 @@ func stringEncoder(e *encodeState, v reflect.Value, opts encoderOptions, ns nest
 		b = appendString(b, header)
 		b = appendString(b, lbc)
 		e.Write(appendString(b, block))
-		return
-	} else if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
-		e.Write(appendString(b, quoteWith(s, '\'')))
 		return
 	}
 	e.Write(appendString(b, s))
@@ -732,6 +727,30 @@ func unsupportedTypeEncoder(e *encodeState, v reflect.Value, _ encoderOptions, _
 
 type mapEncoder struct {
 	elemEnc encoderFunc
+}
+
+// if flow style enabled, use this encode, just to make code more clear
+// the map here is nonempty, all checks passed
+func (me mapEncoder) encodeFlow(e *encodeState, sv []reflectWithString, opts encoderOptions, ns nestedState) {
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	e.Write(append(b, '{'))
+	next := []byte{}
+	for _, kv := range sv {
+		b := append(e.AvailableBuffer(), next...)
+		next = []byte{',', ' '}
+
+		if opts.isJSONStyle {
+			kv.ks = quoteString(e, kv.ks, opts)
+		}
+		b = appendString(b, kv.ks)
+
+		b = append(b, ':')
+		e.Write(b)
+		me.elemEnc(e, kv.v, opts, inMap)
+	}
+	if opts.isFlowStyle {
+		e.WriteByte('}')
+	}
 }
 
 func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
@@ -757,11 +776,7 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		}
 		e.ptrSeen[ptr] = struct{}{}
 		defer delete(e.ptrSeen, ptr)
-	}
-
-	if opts.isFlowStyle {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
-		e.Write(append(b, '{'))
+		defer func() { e.ptrLevel-- }()
 	}
 
 	// Extract and sort the keys.
@@ -780,25 +795,13 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		return strings.Compare(i.ks, j.ks)
 	})
 
-	for i, kv := range sv {
-		//reset indentPrinted bit after first element printed xD
-		if i > 0 && ns&indentPrinted != 0 {
-			ns = ns &^ indentPrinted
-		}
-		b := e.AvailableBuffer()
+	if opts.isFlowStyle {
+		me.encodeFlow(e, sv, opts, ns)
+		return
+	}
 
-		if opts.isFlowStyle {
-			if i > 0 {
-				b = append(b, ',', ' ')
-			}
-		} else {
-			if i > 0 && ns&inSlice != 0 {
-				//remove inSlice bit so it does not print '-'
-				//add inStruct bit to preserve indent size
-				ns = ns&^inSlice | inStruct
-			}
-			b = appendIndent(b, false, opts, ns)
-		}
+	for _, kv := range sv {
+		b := appendIndent(e.AvailableBuffer(), false, opts, ns)
 
 		if opts.isJSONStyle {
 			kv.ks = quoteString(e, kv.ks, opts)
@@ -808,12 +811,13 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions
 		b = append(b, ':')
 		e.Write(b)
 		me.elemEnc(e, kv.v, opts, inMap)
-	}
-	if opts.isFlowStyle {
-		e.WriteByte('}')
+		//after first field printed:
+		//remove inSlice + indentPrinted bit, so it does not print '-'
+		//set ns = inStruct just to preserve the indent size
+		ns = inStruct
 	}
 
-	e.ptrLevel--
+	// e.ptrLevel--
 }
 
 func newMapEncoder(t reflect.Type) encoderFunc {
@@ -851,18 +855,17 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 		e.Write(append(b, '{'))
 	}
 
-	//check this when printing a slice of structs
-	isFirstField := true
 	//each time isAnonymousRef field is processed and anchor pointer found
 	//add its type to anchorsFound. So all fields with anonymousParentTyp
 	//in this map should be skipped without encoding, because there is an *anchor
 	//for the whole struct
 	anchorsFound := make(map[reflect.Type]struct{})
+	//check this when printing a slice of structs, or empty/with private fields only/ structs
 	empty := true
 FieldLoop:
 	for i := range se.fields.list {
 		f := &se.fields.list[i]
-		//reset indentPrinted bit after first element printed xD
+		//reset indentPrinted bit after first element printed (means: slice of structs)
 		if !empty && ns&indentPrinted != 0 {
 			ns = ns &^ indentPrinted
 		}
@@ -906,21 +909,21 @@ FieldLoop:
 		if opts.isFlowStyle {
 			next = []byte{',', ' '}
 		}
-		empty = false
 
 		//derived options
 		fOpts := opts
 		fOpts.isFlowStyle = fOpts.isFlowStyle || f.flow
 
 		if !opts.isFlowStyle {
-			if !isFirstField && ns&inSlice != 0 {
-				//remove inSlice bit so it does not print '-'
-				//add inStruct bit to preserve indent size
+			if !empty && ns&inSlice != 0 {
+				//for second field and on remove inSlice bit so it does not print '-'
+				//add inStruct bit just to preserve the indent size
 				ns = ns&^inSlice | inStruct
 			}
 			b = appendIndent(b, false, opts, ns)
 		}
-		isFirstField = false
+		empty = false
+		//anonymous self embed with pointer, like struct Person{*Person...}, f->*Person field
 		if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
 			if name, ok := opts.anchors[fv.Pointer()]; ok {
 				//anchor found, merge alias
@@ -968,7 +971,6 @@ FieldLoop:
 
 		e.Write(b)
 		f.encoder(e, fv, fOpts, inStruct)
-
 	}
 	//if no fields printed
 	if empty && !opts.isFlowStyle {
@@ -988,6 +990,20 @@ type arrayEncoder struct {
 	elemEnc encoderFunc
 }
 
+// flow style encoder, made it separate for readability
+func (ae arrayEncoder) encodeFlow(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
+	n := v.Len()
+	b := appendIndent(e.AvailableBuffer(), true, opts, ns)
+	e.Write(append(b, '['))
+	for i := range n {
+		if i > 0 {
+			e.Write([]byte{',', ' '})
+		}
+		ae.elemEnc(e, v.Index(i), opts, inSlice)
+	}
+	e.WriteByte(']')
+}
+
 func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
 	if ns != 0 || opts.level == 0 && !opts.isFlowStyle {
 		opts.level++
@@ -997,7 +1013,6 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 		}
 	}
 	n := v.Len()
-	//TODO: replace ns with inStruct or move indent inside if?
 	if n == 0 {
 		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
 		e.Write(append(b, '[', ']'))
@@ -1005,30 +1020,27 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 	}
 
 	if opts.isFlowStyle {
-		b := appendIndent(e.AvailableBuffer(), true, opts, ns)
-		e.Write(append(b, '['))
-		for i := range n {
-			if i > 0 {
-				e.Write([]byte{',', ' '})
-			}
-			ae.elemEnc(e, v.Index(i), opts, inSlice)
-		}
-		e.WriteByte(']')
+		ae.encodeFlow(e, v, opts, ns)
 		return
 	}
 
-	// e.Write(b)
+	/*
+		Here, an array differs from other types in that it prints the required indentation
+		itself, rather than delegating it to the element. If the element is a structure
+		or a map, this applies only to it's first field;
+		the others print the indentation themselves. This is controlled by the bit indentPrinted
+		Alittle bit confusing logic, but this is the only way to encode slices of slices I have found.
+	*/
 	for i := range n {
 		nsChild := inSlice | indentPrinted
 		if ns&indentPrinted == 0 {
 			e.Write(appendIndent(e.AvailableBuffer(), true, opts, inSlice))
 		} else {
-			//TODO: replace with appendIndent, because it respects indentNum
-			e.Write([]byte{'-', ' '})
+			//if slice of slices and this is the second slice, just print "- "
+			e.Write(indent(1, opts.indentNum, true))
 		}
-
 		ae.elemEnc(e, v.Index(i), opts, nsChild)
-		ns = ns &^ indentPrinted
+		ns = ns &^ indentPrinted //reset the indentPrinted bit, coming from parent ns
 	}
 }
 

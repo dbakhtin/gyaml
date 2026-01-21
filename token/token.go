@@ -679,6 +679,8 @@ func IsNeedQuoted(value string) bool {
 	if value == "" {
 		return true
 	}
+	//TODO: merge with isReserved check
+	
 	if _, exists := reservedEncKeywordMap[value]; exists {
 		return true
 	}
