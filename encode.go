@@ -551,29 +551,28 @@ func indent(level, indentNum int, isSlice bool) []byte {
 	return indent
 }
 
-// TODO: optimize?
-// TODO: remove opts & use only level + indentNum - or use a stripped options type
-// TODO: remove isScalar, it intersects with opts.isFlowStyle?
-func appendIndent(dst []byte, isScalar bool, opts encoderOptions, ns nestedState) []byte {
+func appendIndent(dst []byte, inline bool, opts encoderOptions, ns nestedState) []byte {
 	if ns&indentPrinted != 0 {
 		return dst
 	}
-	if isScalar {
-		if ns&inSlice != 0 {
-			if opts.isFlowStyle {
-				return dst
-			}
-			dst = append(dst, '\n')
-			return append(dst, indent(opts.level, opts.indentNum, true)...)
+	//for slices: elements always start with line break unless flow styled
+	if ns&inSlice != 0 {
+		if opts.isFlowStyle {
+			return dst
 		}
-		if ns != 0 {
+		dst = append(dst, '\n')
+		return append(dst, indent(opts.level, opts.indentNum, true)...)
+	}
+	//for structs & maps
+	if ns != 0 {
+		if inline {
 			return append(dst, ' ')
 		}
-	} else {
-		if ns != 0 {
-			dst = append(dst, '\n')
-			return append(dst, indent(opts.level, opts.indentNum, ns&inSlice != 0)...)
-		}
+		dst = append(dst, '\n')
+		return append(dst, indent(opts.level, opts.indentNum, ns&inSlice != 0)...)
+	}
+	//top-level non-inline
+	if ns == 0 && !inline {
 		dst = append(dst, '\n')
 	}
 	return dst
@@ -835,6 +834,39 @@ func newMapEncoder(t reflect.Type) encoderFunc {
 	return me.encode
 }
 
+// mergeAlias merges an alias if found in anchor's map
+func mergeAlias(e *encodeState, ptr uintptr, opts encoderOptions) bool {
+	anchor, ok := getAnchor(opts, ptr)
+	if ok {
+		e.WriteString("<<: *" + anchor)
+	}
+	return ok
+}
+
+// encodeAlias encodes alias if found in anchor's map, returns true is successful
+func encodeAlias(e *encodeState, ptr uintptr, alias string, opts encoderOptions) bool {
+	anchor, ok := getAnchor(opts, ptr)
+	if ok {
+		//alias validity check
+		if alias != "" && anchor != alias {
+			e.error(fmt.Errorf("expected alias name is %q but got %q", alias, anchor))
+		}
+		e.WriteString(" *" + anchor)
+	}
+	return ok
+}
+
+func encodeAnchor(e *encodeState, ptr uintptr, anchor string, opts encoderOptions) {
+	if anchor != "" {
+		anch := storeAnchor(opts, ptr, anchor)
+		if anch == "" {
+			e.error(fmt.Errorf("unexpected empty anchor name"))
+		}
+		b := append(e.AvailableBuffer(), ' ', '&')
+		e.Write(appendString(b, anch))
+	}
+}
+
 type structEncoder struct {
 	fields structFields
 }
@@ -843,6 +875,39 @@ type structFields struct {
 	list         []field
 	byExactName  map[string]*field
 	byFoldedName map[string]*field
+}
+
+type exportedField struct {
+	f  *field
+	fv reflect.Value
+}
+
+func (se structEncoder) exportedFields(v reflect.Value, opts encoderOptions) []exportedField {
+	eFields := make([]exportedField, 0, len(se.fields.list))
+
+FieldLoop:
+	for i := range se.fields.list {
+		f := &se.fields.list[i]
+		// Find the nested struct field by following f.index.
+		fv := v
+		for _, i := range f.index {
+			if fv.Kind() == reflect.Pointer {
+				if fv.IsNil() {
+					continue FieldLoop
+				}
+				fv = fv.Elem()
+			}
+			fv = fv.Field(i)
+		}
+
+		if ((f.omitEmpty || opts.omitEmpty) && isEmptyValue(fv)) ||
+			((f.omitZero || opts.omitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
+			continue
+		}
+		eFields = append(eFields, exportedField{f, fv})
+	}
+
+	return eFields
 }
 
 func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptions, ns nestedState) {
@@ -862,35 +927,18 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, opts encoderOpti
 	anchorsFound := make(map[reflect.Type]struct{})
 	//check this when printing a slice of structs, or empty/with private fields only/ structs
 	empty := true
-FieldLoop:
-	for i := range se.fields.list {
-		f := &se.fields.list[i]
-		//reset indentPrinted bit after first element printed (means: slice of structs)
+	fields := se.exportedFields(v, opts)
+	for i := range fields {
+		f := fields[i].f
+		fv := fields[i].fv
 		if !empty && ns&indentPrinted != 0 {
 			ns = ns &^ indentPrinted
-		}
-
-		// Find the nested struct field by following f.index.
-		fv := v
-		for _, i := range f.index {
-			if fv.Kind() == reflect.Pointer {
-				if fv.IsNil() {
-					continue FieldLoop
-				}
-				fv = fv.Elem()
-			}
-			fv = fv.Field(i)
-		}
-
-		if ((f.omitEmpty || opts.omitEmpty) && isEmptyValue(fv)) ||
-			((f.omitZero || opts.omitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
-			continue
 		}
 
 		// if its a reference to embedded struct & no anchors found, ignore the ref
 		// this is an artificial field with only purpose to track anchors
 		if f.isAnonymousRef {
-			if _, ok := opts.anchors[fv.Pointer()]; !ok {
+			if _, ok := getAnchor(opts, fv.Pointer()); !ok {
 				continue
 			}
 		}
@@ -910,10 +958,6 @@ FieldLoop:
 			next = []byte{',', ' '}
 		}
 
-		//derived options
-		fOpts := opts
-		fOpts.isFlowStyle = fOpts.isFlowStyle || f.flow
-
 		if !opts.isFlowStyle {
 			if !empty && ns&inSlice != 0 {
 				//for second field and on remove inSlice bit so it does not print '-'
@@ -925,10 +969,7 @@ FieldLoop:
 		empty = false
 		//anonymous self embed with pointer, like struct Person{*Person...}, f->*Person field
 		if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
-			if name, ok := opts.anchors[fv.Pointer()]; ok {
-				//anchor found, merge alias
-				b = appendString(b, "<<: *")
-				e.Write(appendString(b, name))
+			if found := mergeAlias(e, fv.Pointer(), opts); found {
 				continue
 			}
 		}
@@ -939,37 +980,22 @@ FieldLoop:
 		} else {
 			b = append(b, f.nameBytes...)
 		}
-		b = append(b, ':')
-
+		e.Write(append(b, ':'))
+		//types of possible anchors/aliases
 		isReference := (fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Map || fv.Kind() == reflect.Slice)
 		if isReference {
-			//searching for pointer in the anchor cache
-			if anch, ok := getAnchor(opts, fv.Pointer()); ok {
-				//alias validity check
-				if f.alias != "" && anch != f.alias {
-					e.error(fmt.Errorf("expected alias name is %q but got %q", f.alias, anch))
-				}
-				b = append(b, ' ', '*')
-				b = appendString(b, anch)
+			if found := encodeAlias(e, fv.Pointer(), f.alias, opts); found {
 				if fv.Kind() == reflect.Pointer {
 					anchorsFound[fv.Elem().Type()] = struct{}{}
 				}
-				e.Write(b)
 				continue
 			}
 
-			//storing anchor in map cache
-			if f.anchor != "" {
-				anchor := storeAnchor(opts, fv.Pointer(), f.anchor)
-				if anchor == "" {
-					e.error(fmt.Errorf("unexpected empty anchor name for field: %s", f.name))
-				}
-				b = append(b, ' ', '&')
-				b = appendString(b, anchor)
-			}
+			encodeAnchor(e, fv.Pointer(), f.anchor, opts)
 		}
-
-		e.Write(b)
+		fOpts := opts
+		//merge global flow with field flow
+		fOpts.isFlowStyle = fOpts.isFlowStyle || f.flow
 		f.encoder(e, fv, fOpts, inStruct)
 	}
 	//if no fields printed
@@ -1034,7 +1060,7 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, opts encoderOptio
 	for i := range n {
 		nsChild := inSlice | indentPrinted
 		if ns&indentPrinted == 0 {
-			e.Write(appendIndent(e.AvailableBuffer(), true, opts, inSlice))
+			e.Write(appendIndent(e.AvailableBuffer(), false, opts, inSlice))
 		} else {
 			//if slice of slices and this is the second slice, just print "- "
 			e.Write(indent(1, opts.indentNum, true))

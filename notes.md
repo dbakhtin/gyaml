@@ -11,8 +11,8 @@
 * Less gc pressure & memory consumption upto 10 times ymmv, same example
 
 # TODO
+* replace encoderOptions with a bitmask, move all map caches to encoderState
 * Optimize marked with //TODO: functions & algorithms
-* Optimize options & argument options
 * Commented tests with isEmpty for structs
 * Add options to Marshal func - can help with custom MarshalYAMLing, ex: global flow tag
 * Fix package documentation
