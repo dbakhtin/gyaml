@@ -11,24 +11,24 @@ import (
 	"io"
 )
 
-// TODO: make private?
 // An Encoder writes YAML values to an output stream.
 type Encoder struct {
 	w   io.Writer
 	err error
 
-	options encoderOptions
-	//documentWritten indicates if atleas one document has been written by Encode. Each document must be split by "---\n"
+	options EncoderOptions
+	//documentWritten tells if atleast one document has been written by Encode.
+	//Each document must be split by a "---\n"
 	documentWritten bool
 }
 
 // NewEncoder returns a new encoder that writes to w.
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w: w, options: defaultEncoderOptions()}
+	return &Encoder{w: w, options: DefaultEncoderOptions()}
 }
 
-func (e *Encoder) WithOptions(opts encoderOptions) *Encoder {
-	if opts.indentSize < 2 {
+func (e *Encoder) WithOptions(opts EncoderOptions) *Encoder {
+	if opts.IndentSize < 2 {
 		e.err = errors.New("wrong indent size option")
 	}
 	e.options = opts
@@ -37,13 +37,13 @@ func (e *Encoder) WithOptions(opts encoderOptions) *Encoder {
 
 // UseSingleQuote determines if single or double quotes should be preferred for strings.
 func (e *Encoder) WithSingleQuote(yes bool) *Encoder {
-	e.options.singleQuote = yes
+	e.options.SingleQuote = yes
 	return e
 }
 
 // Flow style for sequences
 func (e *Encoder) WithFlowStyle(yes bool) *Encoder {
-	e.options.flowStyle = yes
+	e.options.FlowStyle = yes
 	return e
 }
 
@@ -56,7 +56,7 @@ func (e *Encoder) WithJSONStyle(yes bool) *Encoder {
 // OmitZero forces the encoder to assume an `omitzero` struct tag is
 // set on all the fields. See `Marshal` commentary for the `omitzero` tag logic.
 func (e *Encoder) WithOmitZero(yes bool) *Encoder {
-	e.options.omitZero = yes
+	e.options.OmitZero = yes
 	return e
 }
 
@@ -65,21 +65,21 @@ func (e *Encoder) WithOmitZero(yes bool) *Encoder {
 // In the current implementation, the omitempty tag is not implemented in the same way as encoding/json,
 // so please specify this option if you expect the same behavior.
 func (e *Encoder) WithOmitEmpty(yes bool) *Encoder {
-	e.options.omitEmpty = yes
+	e.options.OmitEmpty = yes
 	return e
 }
 
 // WithAutoInt automatically converts floating-point numbers to integers when the fractional part is zero.
 // For example, a value of 1.0 will be encoded as 1.
 func (e *Encoder) WithAutoInt(yes bool) *Encoder {
-	e.options.autoInt = yes
+	e.options.AutoInt = yes
 	return e
 }
 
 // WithLiteralMultilineStyle causes encoding multiline strings with a literal syntax,
 // no matter what characters they include
 func (e *Encoder) WithLiteralMultilineStyle(yes bool) *Encoder {
-	e.options.literalStyleMultiline = yes
+	e.options.LiteralStyleMultiline = yes
 	return e
 }
 
@@ -88,13 +88,13 @@ func (e *Encoder) WithIndent(size int) *Encoder {
 	if size < 2 {
 		e.err = errors.New("wrong indent size option")
 	}
-	e.options.indentSize = size
+	e.options.IndentSize = size
 	return e
 }
 
 // WithIndentSequence causes sequence values to be indented the same value as Indent
 func (e *Encoder) WithIndentSequence(yes bool) *Encoder {
-	e.options.indentSequence = yes
+	e.options.IndentSequence = yes
 	return e
 }
 
@@ -120,14 +120,7 @@ func (enc *Encoder) Encode(v any) error {
 		return err
 	}
 
-	//TODO: indent is a crucial part of yaml format, so move indents to e.marshal
-
 	// Terminate each value with a newline.
-	// This makes the output look a little nicer
-	// when debugging, and some kind of space
-	// is required if the encoded value was a number,
-	// so that the reader knows there aren't more
-	// digits coming.
 	e.WriteByte('\n')
 
 	if !enc.documentWritten {

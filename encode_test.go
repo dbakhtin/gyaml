@@ -10,9 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
-	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -42,9 +40,12 @@ func TestEncode(t *testing.T) {
 		options func(*Encoder) *Encoder
 	}{
 		{
-			"v: \"Null\"\n",
-			map[string]string{"v": "Null"},
-			nil,
+			"a: \"\"\nb: {}\n",
+			struct {
+				A netip.Addr         `yaml:"a"`
+				B struct{ X, y int } `yaml:"b"`
+			}{},
+			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
 		},
 	}
 
@@ -586,10 +587,10 @@ func TestEncodeOmitEmpty(t *testing.T) {
 			},
 			nil,
 		},
-		// Highlighting differences of go-yaml omitempty vs std encoding/json
-		// omitempty. Encoding/json will emit the following fields: https://go.dev/play/p/VvNpdM0GD4d
+		//same behavior as in encoding/json, omitempty does not care for structs
+		//use omitzero for that
 		{
-			"{}\n",
+			"a: \"\"\nb:\n  x: 0\n",
 			struct {
 				// This type has a custom IsZero method.
 				A netip.Addr         `yaml:"a,omitempty"`
@@ -614,7 +615,7 @@ func TestEncodeOmitEmpty(t *testing.T) {
 			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
 		},
 		{
-			"{}\n",
+			"a: \"\"\nb: {}\n",
 			struct {
 				A netip.Addr         `yaml:"a"`
 				B struct{ X, y int } `yaml:"b"`
@@ -644,6 +645,14 @@ type zeroInt int
 
 func (z zeroInt) IsZero() bool {
 	return z < 2
+}
+
+type ZeroStruct struct {
+	X, y int
+}
+
+func (a ZeroStruct) IsZero() bool {
+	return a.X == 0
 }
 
 func TestEncodeOmitZero(t *testing.T) {
@@ -737,6 +746,21 @@ func TestEncodeOmitZero(t *testing.T) {
 				A int     `yaml:"a,omitzero"`
 				B zeroInt `yaml:"b,omitzero"`
 			}{1, 1},
+			nil,
+		},
+		//works like encoding/json omitzero
+		{
+			"a:\n  x: 0\n",
+			struct {
+				A struct{ X, y int } `yaml:"a,omitzero"`
+			}{struct{ X, y int }{0, 1}},
+			nil,
+		},
+		{
+			"{}\n",
+			struct {
+				A ZeroStruct `yaml:"a,omitzero"`
+			}{ZeroStruct{X: 0, y: 1}},
 			nil,
 		},
 	}
@@ -892,13 +916,21 @@ func TestEncodeFlow(t *testing.T) {
 			}{struct{ X, y int }{1, 2}},
 			nil,
 		},
-		// {
-		// 	"{}\n",
-		// 	struct {
-		// 		A struct{ X, y int } `yaml:"a,omitzero,flow"`
-		// 	}{struct{ X, y int }{0, 1}},
-		// 	nil,
-		// },
+		//works like encoding/json omitzero
+		{
+			"a: {x: 0}\n",
+			struct {
+				A struct{ X, y int } `yaml:"a,omitzero,flow"`
+			}{struct{ X, y int }{0, 1}},
+			nil,
+		},
+		{
+			"{}\n",
+			struct {
+				A ZeroStruct `yaml:"a,omitzero,flow"`
+			}{ZeroStruct{X: 0, y: 1}},
+			nil,
+		},
 		{
 			"a: [1, 2]\n",
 			struct {
@@ -1020,7 +1052,7 @@ func TestEncodeStructIncludeMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "a:\n  m:\n    x: z\n"
+	expect := "a:\n  m:\n    x: z"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1131,7 +1163,7 @@ func TestEncodeDefinedTypeKeyMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	expect := "m:\n  x: z\n"
+	expect := "m:\n  x: z"
 	actual := string(bytes)
 	if actual != expect {
 		t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -1471,9 +1503,16 @@ func (t *tMarshal) MarshalYAML() ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+type flowMarshal []string
+
+func (f flowMarshal) MarshalYAML() ([]byte, error) {
+	return MarshalWithOptions([]string(f), EncoderOptions{IndentSize: 2, FlowStyle: true})
+}
+
 func Test_Marshaler(t *testing.T) {
 	t.Run("custom marshaler", func(t *testing.T) {
-		const expected = "tags:\n- hello-world\n"
+		const expected = "tags:\n- hello-world"
 
 		buf, err := Marshal(&tMarshal{"hello-world"})
 		if err != nil {
@@ -1486,7 +1525,7 @@ func Test_Marshaler(t *testing.T) {
 	})
 
 	t.Run("custom nil marshaler", func(t *testing.T) {
-		const expected = "null\n"
+		const expected = "null"
 
 		buf, err := Marshal((*tMarshal)(nil))
 		if err != nil {
@@ -1495,6 +1534,35 @@ func Test_Marshaler(t *testing.T) {
 
 		if string(buf) != expected {
 			t.Fatalf("expected [%s], got [%s]", expected, buf)
+		}
+	})
+
+	t.Run("custom flow marshaler", func(t *testing.T) {
+		const expected = "[hello, world]"
+
+		buf, err := Marshal(flowMarshal{"hello", "world"})
+		if err != nil {
+			t.Fatalf("failed to marshal: %s", err)
+		}
+
+		if string(buf) != expected {
+			t.Fatalf("expected [%s], got [%s]", expected, buf)
+		}
+	})
+
+	t.Run("custom flow marshaler with encode", func(t *testing.T) {
+		const expected = "[hello, world]\n"
+
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		err := enc.Encode(flowMarshal{"hello", "world"})
+		if err != nil {
+			t.Fatalf("failed to marshal: %s", err)
+		}
+
+		got := buf.String()
+		if expected != got {
+			t.Fatalf("expected [%s], got [%s]", expected, got)
 		}
 	})
 }
@@ -1589,8 +1657,7 @@ func TestBytesMarshaler(t *testing.T) {
 	expected := `
 a:
   b:
-    c: foo
-`
+    c: foo`
 	got := "\n" + string(b)
 	if expected != got {
 		t.Fatalf("expected [%s], got [%s]", expected, got)
@@ -1627,7 +1694,7 @@ func TestValueMarshaler(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := string(b)
-		expected := "v: value\n"
+		expected := "v: value"
 		if got != expected {
 			t.Fatalf("expected [%s] got [%s]", expected, got)
 		}
@@ -1640,7 +1707,7 @@ func TestValueMarshaler(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := string(b)
-		expected := "v: value\n"
+		expected := "v: value"
 		if got != expected {
 			t.Fatalf("expected [%s] got [%s]", expected, got)
 		}
@@ -1658,7 +1725,7 @@ func TestValueMarshaler(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := string(b)
-		expected := "v: value\nvp: value\n"
+		expected := "v: value\nvp: value"
 		if got != expected {
 			t.Fatalf("expected [%s] got [%s]", expected, got)
 		}
@@ -2281,8 +2348,7 @@ func TestIssue259(t *testing.T) {
 - baz: yyy
   value: *value
 - baz: zzz
-  value: *value
-`
+  value: *value`
 	got := string(b)
 	if expected != got {
 		t.Fatalf("expected [%s], got [%s]", expected, got)
@@ -2298,7 +2364,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "- - 1\n  - 2\n- - 4\n  - 6\n"
+		expect := "- - 1\n  - 2\n- - 4\n  - 6"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2312,7 +2378,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "- - - 1\n    - 2\n  - - 3\n    - 4\n- - - 5\n    - 6\n"
+		expect := "- - - 1\n    - 2\n  - - 3\n    - 4\n- - - 5\n    - 6"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2330,7 +2396,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "- - a: 1\n    b: 2\n  - a: 3\n    b: 4\n- - a: 4\n    b: 6\n"
+		expect := "- - a: 1\n    b: 2\n  - a: 3\n    b: 4\n- - a: 4\n    b: 6"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2344,7 +2410,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "- - a: 1\n    b: 2\n  - c: 3\n- - d: 4\n"
+		expect := "- - a: 1\n    b: 2\n  - c: 3\n- - d: 4"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2357,7 +2423,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6\n"
+		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2373,7 +2439,7 @@ func TestEncodeSliceOfSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6\n"
+		expect := "a:\n- - 1\n  - 2\n- - 4\n  - 6"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2396,7 +2462,7 @@ func TestEncodeStructOfStruct(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "vi:\n  a: 1\n  b: 2\n"
+		expect := "vi:\n  a: 1\n  b: 2"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2419,7 +2485,7 @@ func TestEncodeStructOfStruct(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := "vi:\n  si:\n    a: 1\n    b: 2\n"
+		expect := "vi:\n  si:\n    a: 1\n    b: 2"
 		actual := string(bytes)
 		if actual != expect {
 			t.Fatalf("unexpected output. expect:[%s] actual:[%s]", expect, actual)
@@ -2449,65 +2515,4 @@ func TestEncodeWrongIndent(t *testing.T) {
 		}
 		buf.Reset()
 	}
-}
-
-func BenchmarkIsReserved(b *testing.B) {
-	const count = 1000
-	strs := make([]string, 0, count+len(reservedNullKeywords)+len(reservedBoolKeywords)+len(reservedInfKeywords)+len(reservedNanKeywords)+len(reservedMiscKeywords))
-	for i := range count {
-		strs = append(strs, strings.Repeat("a", i+1))
-	}
-	reservedSlice := append([]string{}, reservedNullKeywords...)
-	reservedSlice = append(reservedSlice, reservedBoolKeywords...)
-	reservedSlice = append(reservedSlice, reservedInfKeywords...)
-	reservedSlice = append(reservedSlice, reservedNanKeywords...)
-	reservedSlice = append(reservedSlice, reservedMiscKeywords...)
-	strs = append(strs, reservedSlice...)
-
-	isReservedOld := func(s string) bool {
-		return slices.Contains(reservedNullKeywords, s) || slices.Contains(reservedBoolKeywords, s) || slices.Contains(reservedInfKeywords, s) || slices.Contains(reservedNanKeywords, s) || slices.Contains(reservedMiscKeywords, s)
-	}
-	isReservedSlice := func(s string) bool {
-		if len(s) > maxReservedLength {
-			return false
-		}
-		return slices.Contains(reservedSlice, s)
-	}
-
-	b.Run("new isReserved", func(b *testing.B) {
-		check := func() {
-			for i := range strs {
-				_ = isReserved(strs[i])
-			}
-		}
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			check()
-		}
-	})
-
-	b.Run("slice isReserved", func(b *testing.B) {
-		check := func() {
-			for i := range strs {
-				_ = isReservedSlice(strs[i])
-			}
-		}
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			check()
-		}
-	})
-
-	b.Run("old isReserved", func(b *testing.B) {
-		check := func() {
-			for i := range strs {
-				_ = isReservedOld(strs[i])
-			}
-		}
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			check()
-		}
-	})
-
 }

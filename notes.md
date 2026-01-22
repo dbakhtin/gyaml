@@ -7,16 +7,16 @@
 * No JSON marshaler
 * No yaml comments
 * Embedded structs are inlined by default with same priority shadowing as in encoding/json
-* Faster encoding upto 14 times than go-yaml ymmv, see example
-* Less gc pressure & memory consumption upto 14 times ymmv, same example
+* OmitZero tag for structs works like in encoding/json - struct is considered zero value if all (including unexported) fields are zero values. Can be dodged by implementing IsZeroer on struct or enhanced later if really needed.
+* OmitEmpty works like in encoding/json, so it does not check nested struct types for emptyness at all (only scalar struct types, slices, maps, etc) :) Can mix with omitzero if requested, but this is a clear distinction between omitzero and omitempty and I thinks it is good as is.
+* Marshal does not terminate result with \n, Encoder does. This is similar to encoder/json behavior.
+* Faster encoding upto 10-14 times than go-yaml ymmv, see example
+* Less gc pressure & memory consumption upto 10-14 times ymmv, same example
 
 # TODO
-* Test IsNumber
-* Optimize marked with //TODO: functions & algorithms
-* Commented tests with isEmpty for structs
-* Add options to Marshal func - can help with custom MarshalYAMLing, ex: global flow tag
-* Fix package documentation
 
+* Fix package documentation
+* Polish cmd/main.go memory & performance test for readability
 
 # Decoder
 * fuzz_test.go

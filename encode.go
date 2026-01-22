@@ -200,16 +200,22 @@ import (
 // handle them. Passing cyclic structures to Marshal will result in
 // an error.
 func Marshal(v any) ([]byte, error) {
+	return MarshalWithOptions(v, DefaultEncoderOptions())
+}
+
+func MarshalWithOptions(v any, opts EncoderOptions) ([]byte, error) {
 	e := newEncodeState()
 	defer encodeStatePool.Put(e)
 
-	err := e.marshal(v, defaultEncoderOptions())
+	err := e.marshal(v, opts)
 	if err != nil {
 		return nil, err
 	}
-	e.WriteByte('\n')
+	//Marshal does not terminate with \n like Encoder does
+	// e.WriteByte('\n')
 
 	b := append([]byte(nil), e.Bytes()...)
+	//strip \n prefix
 	if len(b) != 0 && b[0] == '\n' {
 		b = b[1:]
 	}
@@ -297,7 +303,7 @@ type encodeState struct {
 	//nested level
 	level int
 
-	opts encoderOptions
+	opts EncoderOptions
 }
 
 const startDetectingCyclesAfter = 1000
@@ -315,6 +321,7 @@ func newEncodeState() *encodeState {
 		e.level = 0
 		clear(e.anchors)
 		clear(e.anchorNames)
+		// e.opts  is set by marshal
 		return e
 	}
 	return &encodeState{
@@ -329,7 +336,7 @@ func newEncodeState() *encodeState {
 // can distinguish intentional panics from this package.
 type yamlError struct{ error }
 
-func (e *encodeState) marshal(v any, opts encoderOptions) (err error) {
+func (e *encodeState) marshal(v any, opts EncoderOptions) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if je, ok := r.(yamlError); ok {
@@ -357,7 +364,7 @@ func isEmptyValue(v reflect.Value) bool {
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64,
-		reflect.Struct,
+		//reflect.Struct,
 		reflect.Interface, reflect.Pointer:
 		return v.IsZero()
 	}
@@ -572,11 +579,11 @@ func appendIndentBuf(e *encodeState, dst []byte, inline bool, ns nestedState) []
 	}
 	//for slices: elements always start with line break unless flow styled
 	if ns&inSlice != 0 {
-		if e.opts.flowStyle {
+		if e.opts.FlowStyle {
 			return dst
 		}
 		dst = append(dst, '\n')
-		return append(dst, indent(e.level, e.opts.indentSize, true)...)
+		return append(dst, indent(e.level, e.opts.IndentSize, true)...)
 	}
 	//for structs & maps
 	if ns != 0 {
@@ -584,7 +591,7 @@ func appendIndentBuf(e *encodeState, dst []byte, inline bool, ns nestedState) []
 			return append(dst, ' ')
 		}
 		dst = append(dst, '\n')
-		return append(dst, indent(e.level, e.opts.indentSize, ns&inSlice != 0)...)
+		return append(dst, indent(e.level, e.opts.IndentSize, ns&inSlice != 0)...)
 	}
 	//top-level non-inline
 	if ns == 0 && !inline {
@@ -656,7 +663,7 @@ func (bits floatEncoder) encode(e *encodeState, v reflect.Value, ns nestedState)
 	}
 
 	b = strconv.AppendFloat(b, f, byte('g'), -1, int(bits))
-	if !bytes.Contains(b, []byte{'e'}) && !bytes.Contains(b, []byte{'.'}) && !e.opts.autoInt {
+	if !bytes.Contains(b, []byte{'e'}) && !bytes.Contains(b, []byte{'.'}) && !e.opts.AutoInt {
 		// append x.0 suffix to keep float value context
 		b = append(b, '.', '0')
 	}
@@ -669,17 +676,17 @@ var (
 )
 
 // isNeedQuotedOpts checks whether the value needs quote for passed string or not
-func isNeedQuotedOpts(value string, opts *encoderOptions) bool {
+func isNeedQuotedOpts(value string, opts *EncoderOptions) bool {
 	if opts.JSONStyle {
 		return true
 	}
-	if opts.literalStyleMultiline && strings.ContainsAny(value, "\n\r") {
+	if opts.LiteralStyleMultiline && strings.ContainsAny(value, "\n\r") {
 		return false
 	}
-	if opts.flowStyle && strings.ContainsAny(value, `]},'"`) {
+	if opts.FlowStyle && strings.ContainsAny(value, `]},'"`) {
 		return true
 	}
-	if opts.flowStyle {
+	if opts.FlowStyle {
 		for i := 0; i < len(value); i++ {
 			if value[i] != ':' {
 				continue
@@ -695,7 +702,7 @@ func isNeedQuotedOpts(value string, opts *encoderOptions) bool {
 }
 
 func quoteString(e *encodeState, s string) string {
-	if e.opts.singleQuote {
+	if e.opts.SingleQuote {
 		return quoteWith(s, '\'')
 	}
 	return strconv.Quote(s)
@@ -719,7 +726,7 @@ func stringEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 		if ns&inSlice == 0 {
 			level++
 		}
-		indent := strings.Repeat(" ", level*e.opts.indentSize)
+		indent := strings.Repeat(" ", level*e.opts.IndentSize)
 		values := []string{}
 		for v := range strings.SplitSeq(s, lbc) {
 			values = append(values, indent+v)
@@ -769,7 +776,7 @@ func (me mapEncoder) encodeFlow(e *encodeState, sv []reflectWithString, ns neste
 		e.Write(b)
 		me.elemEnc(e, kv.v, inMap)
 	}
-	if e.opts.flowStyle {
+	if e.opts.FlowStyle {
 		e.WriteByte('}')
 	}
 }
@@ -817,7 +824,7 @@ func (me mapEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 		return strings.Compare(i.ks, j.ks)
 	})
 
-	if e.opts.flowStyle {
+	if e.opts.FlowStyle {
 		me.encodeFlow(e, sv, ns)
 		return
 	}
@@ -921,8 +928,8 @@ FieldLoop:
 			fv = fv.Field(i)
 		}
 
-		if ((f.omitEmpty || e.opts.omitEmpty) && isEmptyValue(fv)) ||
-			((f.omitZero || e.opts.omitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
+		if ((f.omitEmpty || e.opts.OmitEmpty) && isEmptyValue(fv)) ||
+			((f.omitZero || e.opts.OmitZero) && (f.isZero == nil && fv.IsZero() || (f.isZero != nil && f.isZero(fv)))) {
 			continue
 		}
 		eFields = append(eFields, exportedField{f, fv})
@@ -937,7 +944,7 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 		defer func() { e.level-- }()
 	}
 	next := []byte{} //field separator
-	if e.opts.flowStyle {
+	if e.opts.FlowStyle {
 		b := appendIndent(e, true, ns)
 		e.Write(append(b, '{'))
 	}
@@ -976,11 +983,11 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 		}
 
 		b := append(e.AvailableBuffer(), next...)
-		if e.opts.flowStyle {
+		if e.opts.FlowStyle {
 			next = []byte{',', ' '}
 		}
 
-		if !e.opts.flowStyle {
+		if !e.opts.FlowStyle {
 			if !empty && ns&inSlice != 0 {
 				//for second field and on remove inSlice bit so it does not print '-'
 				//add inStruct bit just to preserve the indent size
@@ -1015,18 +1022,18 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 
 			encodeAnchor(e, fv.Pointer(), f.anchor)
 		}
-		oldFlow := e.opts.flowStyle
+		oldFlow := e.opts.FlowStyle
 		//merge global flow with field flow
-		e.opts.flowStyle = e.opts.flowStyle || f.flow
+		e.opts.FlowStyle = e.opts.FlowStyle || f.flow
 		f.encoder(e, fv, inStruct)
 		//and revert back ;)
-		e.opts.flowStyle = oldFlow
+		e.opts.FlowStyle = oldFlow
 	}
 	//if no fields printed
-	if empty && !e.opts.flowStyle {
+	if empty && !e.opts.FlowStyle {
 		b := appendIndent(e, true, ns)
 		e.Write(append(b, '{', '}'))
-	} else if e.opts.flowStyle {
+	} else if e.opts.FlowStyle {
 		e.WriteByte('}')
 	}
 }
@@ -1055,11 +1062,11 @@ func (ae arrayEncoder) encodeFlow(e *encodeState, v reflect.Value, ns nestedStat
 }
 
 func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
-	if ns != 0 || e.level == 0 && !e.opts.flowStyle {
+	if ns != 0 || e.level == 0 && !e.opts.FlowStyle {
 		e.level++
 		defer func() { e.level-- }()
 		//just add one more indent? or check if ns&inMap != 0 || ns&inStruct != 0
-		if e.opts.indentSequence {
+		if e.opts.IndentSequence {
 			e.level++
 			defer func() { e.level-- }()
 		}
@@ -1071,7 +1078,7 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 		return
 	}
 
-	if e.opts.flowStyle {
+	if e.opts.FlowStyle {
 		ae.encodeFlow(e, v, ns)
 		return
 	}
@@ -1089,7 +1096,7 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 			e.Write(appendIndent(e, false, inSlice))
 		} else {
 			//if slice of slices and this is the second slice, just print "- "
-			e.Write(indent(1, e.opts.indentSize, true))
+			e.Write(indent(1, e.opts.IndentSize, true))
 		}
 		ae.elemEnc(e, v.Index(i), nsChild)
 		ns = ns &^ indentPrinted //reset the indentPrinted bit, coming from parent ns

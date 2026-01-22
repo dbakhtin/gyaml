@@ -1,7 +1,7 @@
 package gyaml
 
 import (
-	"regexp"
+	"strings"
 	"time"
 )
 
@@ -18,13 +18,20 @@ var timestampFormats = []string{
 	"15:4",
 }
 
-var legalTimeChars = regexp.MustCompile(`^[0-9]+[-:0-9\stTzZ.]*$`)
+const legalTimeChars = "0123456789-: tTZ."
 
 func isTimestamp(value string) bool {
-	//rude check if not a timestamp, saves a looot of cpu
-	if !legalTimeChars.MatchString(value) {
+	//rough check if not a timestamp, saves a looot of cpu
+	n := len(value)
+	if n < 3 || n > len(time.RFC3339Nano) {
 		return false
 	}
+	for i := range n {
+		if !strings.ContainsRune(legalTimeChars, rune(value[i])) {
+			return false
+		}
+	}
+
 	for _, format := range timestampFormats {
 		if _, err := time.Parse(format, value); err == nil {
 			return true

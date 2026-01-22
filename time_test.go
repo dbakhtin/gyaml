@@ -15,6 +15,8 @@ func TestIsTimestamp(t *testing.T) {
 		{"2006-01-02", true},
 		{"2006-01-02C", false},
 		{"15:4", true},
+		{"1:4", true},
+		{"1", false},
 		{"15:4F", false},
 	}
 	for _, test := range tests {

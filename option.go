@@ -2,21 +2,21 @@ package gyaml
 
 const DefaultIndentSize = 2
 
-// encoderOptions are global encoder options
-type encoderOptions struct {
-	singleQuote           bool
-	flowStyle             bool
+// EncoderOptions are global encoder options
+type EncoderOptions struct {
+	SingleQuote           bool
+	FlowStyle             bool
 	JSONStyle             bool
-	omitZero              bool
-	omitEmpty             bool
-	autoInt               bool
-	literalStyleMultiline bool
-	indentSequence        bool
+	OmitZero              bool
+	OmitEmpty             bool
+	AutoInt               bool
+	LiteralStyleMultiline bool
+	IndentSequence        bool
 
 	//default indent size in spaces
-	indentSize int
+	IndentSize int
 }
 
-func defaultEncoderOptions() encoderOptions {
-	return encoderOptions{indentSize: DefaultIndentSize}
+func DefaultEncoderOptions() EncoderOptions {
+	return EncoderOptions{IndentSize: DefaultIndentSize}
 }
