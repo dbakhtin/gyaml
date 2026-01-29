@@ -2516,3 +2516,29 @@ func TestEncodeWrongIndent(t *testing.T) {
 		buf.Reset()
 	}
 }
+func TestEncodeScalar(t *testing.T) {
+	type Test struct {
+		source   string
+		result   string
+		hasError bool
+	}
+	tests := []Test{
+		{"foo", "foo", false},
+		{"foo bar", "foo bar", false},
+		{"foo bar:", "\"foo bar:\"", false},
+		{" foo bar", "\" foo bar\"", false},
+		{"foo bar\n", "|\n  foo bar", false},
+	}
+	var buf bytes.Buffer
+
+	for _, test := range tests {
+		res, err := Marshal(test.source)
+		if err != nil && !test.hasError {
+			t.Fatalf("expected no error for [%s]", test.source)
+		}
+		if test.result != string(res) {
+			t.Errorf("expected [%s] got [%s]", test.result, string(res))
+		}
+		buf.Reset()
+	}
+}

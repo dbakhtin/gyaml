@@ -13,8 +13,42 @@
 * Faster encoding upto 10-14 times than go-yaml ymmv, see example
 * Less gc pressure & memory consumption upto 10-14 times ymmv, same example
 
-# TODO
+# TIP OF THE DAY
+* Use 'gc' to un/comment region
 
+# Scaner
+* in stateEndValue when state = ObjectValue implement the ',' logic for a \n
+* Start from beginning, don't use json code, but compare if needed
+* I have no clear criteria of stateEndValue, because no closing brackets, etc
+** This means I need to reconsider checks inside eof()
+* Count indents
+* Entry point should be stateNewLine
+** Inc space counter if space
+** When string/number/unqstr met push parseState <- scalar (add to consts)
+*** When ':' met check if next is space. if yes then substitute scalar with objectKey. If not scalar then error. If not space then continue str
+    the end of the unquoted string is only a ": "
+**** ": " -> replace objectKey with objectValue and parse value. Good to check if scalar contains '\n' then it's error, but can leave for later tuning.
+***** parse value. if ': ' met in line then error. if '\n' met then
+****** save last indent, reset current and inc space count. if indents equal then replace objectValue with objectKey and repeat above. If not then error 
+        with one exception (later) if ":   \n" then objectValue was empty and expect a greater indent on new line with object value and increase nestedlevel (push).
+        if indent decreased then pop or error.
+**** eof -> only scalar in parseState, pop it and finish OK
+* test with empty lines consisting of spaces + \n inside an object or array
+* test with ": \n" for object keys
+
+* Booleans
+** remove? scanner does not care about the difference between bools & unquoted strings
+* Slices
+** count indents. if "- " met then begins array (push) and parse value till '\n' then stateNewLine
+** count indents. If less than prev then pop. if greater then error. if "- " met and same indent then parse value till \n then stateNewLine. if not met then error.
+** if eof() pop state & and check again (test this with multiple nesting)
+
+
+# TODO
+* Go TDD way: write red test -> fix source, enhance test -> fix source and so on.
+* Decoder scanner
+** Add state for unquoted string: it throws error on space met and is an alternative branch when scanning bools or unquoted chars
+* Clear api surface (see: options, etc) and compare to encoding/json api surface
 * Fix package documentation
 * Polish cmd/main.go memory & performance test for readability
 

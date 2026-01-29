@@ -11,6 +11,30 @@ import (
 	"io"
 )
 
+// // A Decoder reads and decodes JSON values from an input stream.
+// type Decoder struct {
+// 	r       io.Reader
+// 	buf     []byte
+// 	d       decodeState
+// 	scanp   int   // start of unread data in buf
+// 	scanned int64 // amount of data already scanned
+// 	scan    scanner
+// 	err     error
+//
+// 	tokenState int
+// 	tokenStack []int
+//
+// 	opts DecoderOptions
+// }
+//
+// // NewDecoder returns a new decoder that reads from r.
+// //
+// // The decoder introduces its own buffering and may
+// // read data from r beyond the JSON values requested.
+// func NewDecoder(r io.Reader) *Decoder {
+// 	return &Decoder{r: r}
+// }
+
 // An Encoder writes YAML values to an output stream.
 type Encoder struct {
 	w   io.Writer
