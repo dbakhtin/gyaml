@@ -120,6 +120,7 @@ func TestValidMap2(t *testing.T) {
 			data string
 			ok   bool
 		}{
+			{"v:\n  u: 2", true},
 			{"v:\n  u:\n  2", false},
 			{"v:\n  u: 2", true},
 		}

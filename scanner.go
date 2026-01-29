@@ -254,20 +254,6 @@ func incSpaceState(s *scanner) {
 	s.indents[1]++
 }
 
-// stateSpace is the state expecting mandatory space, ex: after parsing an object key with line-break in "foo:\n  bar"
-func stateSpace(s *scanner, c byte) int {
-	if isSpace(c) {
-		incSpaceState(s)
-		s.step = stateBeginValueOrEmpty
-		return scanSkipSpace
-	}
-	return s.error(c, "expected space char")
-}
-
-func saveLineIndent(s *scanner) {
-	s.indents[0] = s.indents[1]
-}
-
 // stateBeginLine is the state after reading `\n` or at the beginning.
 func stateBeginLine(s *scanner, c byte) int {
 	//skip multiple linebreaks
@@ -282,43 +268,38 @@ func stateBeginLine(s *scanner, c byte) int {
 	n := len(s.parseState)
 	//if scanning object
 	icmp := cmp.Compare(s.indents[1], s.indents[0])
-	if n > 0 && icmp != 0 {
+	if n > 0 {
 		// parseObjectKey & parseObjectValue are swapped each time in stateEndValue until indents change
 		switch s.parseState[n-1] {
 		case parseObjectKey:
-			if icmp == -1 {
+			switch icmp {
+			case -1:
 				s.popParseState()
-			} else {
-				//MUST BE ERROR because I'm expecting a key
-				return s.error(c, "unexpected indent when parsing object key")
-				//nested object, array, smth
-				// s.parseState[n-1] = parseObjectValue //we got some value here
-				// s.pushParseState(c, parseObjectKey, scanObjectKey)
+			case 1:
+				return s.error(c, "unexpected increased indent when parsing object key")
 			}
 		case parseObjectValue:
 			// check if not in a multiline string?
-			if icmp == -1 {
+			switch icmp {
+			case -1:
 				// error now but test later may be just pop?
 				return s.error(c, "unexpected decrement of indent")
-			} else {
-				//go straight to value scan without updating indents
-				return stateBeginValue(s, c)
+			case 0:
+				return s.error(c, "unexpected object value when expecting object key")
 			}
 		case parseArrayValue:
 		}
 	}
-	// res := stateBeginValue(s, c)
-	// saveLineIndent(s)
-	// s.indents[0] = s.indents[1] //store current indent
 	return stateBeginValue(s, c)
-	// return res
 }
 
-// stateEndLine is a state after '\n' in a non-blank line
-func stateEndLine(s *scanner, c byte) int {
+// stateEndLine is a state when c == '\n' in a non-blank line
+func stateEndLine(s *scanner, _ byte) int {
 	s.indents[0] = s.indents[1]
+	s.indents[1] = 0
+	s.step = stateBeginLine
 	//either return or set step
-	return stateBeginLine(s, c)
+	return scanContinue
 }
 
 // TODO: prob can merge with stateBeginLine and track \n here
@@ -343,9 +324,7 @@ func stateBeginValue(s *scanner, c byte) int {
 	// }
 	switch c {
 	case '\n':
-		saveLineIndent(s)
-		s.step = stateBeginLine
-		return scanContinue
+		return stateEndLine(s, c)
 	case '{':
 		s.step = stateBeginStringOrEmpty
 		return s.pushParseState(c, parseObjectKey, scanBeginObject)
@@ -431,10 +410,8 @@ func stateEndValue(s *scanner, c byte) int {
 		return s.error(c, "after object key")
 	case parseObjectValue:
 		if isLineBreak(c) {
-			s.step = stateBeginLine
 			s.parseState[n-1] = parseObjectKey
-			saveLineIndent(s)
-			return scanObjectValue
+			return stateEndLine(s, c)
 		}
 		//old, but leave
 		// if c == ',' {
@@ -505,9 +482,7 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 		//TODO: in stateBeginLine check if indent increased and in state ObjectKey then switch state to ObjectValue
 		//TODO: use step instead of return?? or it reruns BeginLine inside
 		// return stateBeginLine(s, c)
-		s.step = stateBeginLine
-		saveLineIndent(s)
-		return scanObjectKey
+		return stateEndLine(s, c)
 	}
 	//TODO: check c is printable? or valid a string char
 	s.step = stateInStringUnq
@@ -518,8 +493,7 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 // stateInStringUnq is the state after reading f,t (and not fa, tr following
 func stateInStringUnq(s *scanner, c byte) int {
 	if isLineBreak(c) {
-		s.step = stateBeginLine
-		saveLineIndent(s)
+		// s.step = stateEndLine
 		return stateEndValue(s, c)
 		// return scanContinue
 	}
