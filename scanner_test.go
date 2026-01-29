@@ -113,6 +113,23 @@ func TestValidQuoted(t *testing.T) {
 	})
 }
 
+func TestValidMap2(t *testing.T) {
+	//Worked
+	t.Run("non-nesting", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"v:\n  u:\n  2", false},
+			{"v:\n  u: 2", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}
 func TestValidMap(t *testing.T) {
 	//Worked
 	t.Run("non-nesting", func(t *testing.T) {
@@ -120,14 +137,16 @@ func TestValidMap(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			// {"v: 1\nu: 2", true},
-			// {"v: 1.1\nu: 2.2e-5", true},
-			// {"v: a\nu: b", true},
-			// {"v: \"a\"\nu: \"b\"", true},
+			{"v: 1\nu: 2", true},
+			{"v: 1.1\nu: 2.2e-5", true},
+			{"v: a\nu: b", true},
+			{"v: \"a\"\nu: \"b\"", true},
 			{"v: 1\n u: 2", false},
-			// {"v: 1\nu:2", false},
-			// {"v:1\nu: 2", false},
-			// {"1: 2\n3: 4", true},
+			{"v: a: b", false},
+			{"v: 1: b", false},
+			{"v: 1\nu:2", false},
+			{"v:1\nu: 2", false},
+			{"1: 2\n3: 4", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -146,7 +165,9 @@ func TestValidMap(t *testing.T) {
 			{"v:\n  a: 2.2", true},
 			{"1:\n  2: 2.2", true},
 			{"v:\n  u:\n   t: 2", true},
-			{"v:\n  u:\n   t:\n    2", true}, //2 is not a key but value. Good test to show that I should not push keys in BeginLine. A key is only a keywhen ": " is met. Until then its a scalar
+			{"v:\n  u:\n   t:\n    2", true},
+			{"v:\n  u:\n  2", false},
+			{"v:\n  u:\n   t:\n   2", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {

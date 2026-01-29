@@ -32,16 +32,16 @@ func Valid(data []byte) bool {
 // checkValid verifies that data is valid JSON-encoded data.
 // scan is passed in for use by checkValid to avoid an allocation.
 // checkValid returns nil or a SyntaxError.
-func checkValid(data []byte, scan *scanner) error {
-	scan.reset()
+func checkValid(data []byte, s *scanner) error {
+	s.reset()
 	for _, c := range data {
-		scan.bytes++
-		if scan.step(scan, c) == scanError {
-			return scan.err
+		s.bytes++
+		if s.step(s, c) == scanError {
+			return s.err
 		}
 	}
-	if scan.eof() == scanError {
-		return scan.err
+	if s.eof() == scanError {
+		return s.err
 	}
 	return nil
 }
@@ -264,6 +264,10 @@ func stateSpace(s *scanner, c byte) int {
 	return s.error(c, "expected space char")
 }
 
+func saveLineIndent(s *scanner) {
+	s.indents[0] = s.indents[1]
+}
+
 // stateBeginLine is the state after reading `\n` or at the beginning.
 func stateBeginLine(s *scanner, c byte) int {
 	//skip multiple linebreaks
@@ -285,23 +289,36 @@ func stateBeginLine(s *scanner, c byte) int {
 			if icmp == -1 {
 				s.popParseState()
 			} else {
+				//MUST BE ERROR because I'm expecting a key
+				return s.error(c, "unexpected indent when parsing object key")
 				//nested object, array, smth
-				s.parseState[n-1] = parseObjectValue //we got some value here
-				s.pushParseState(c, parseObjectKey, scanObjectKey)
+				// s.parseState[n-1] = parseObjectValue //we got some value here
+				// s.pushParseState(c, parseObjectKey, scanObjectKey)
 			}
 		case parseObjectValue:
 			// check if not in a multiline string?
 			if icmp == -1 {
 				// error now but test later may be just pop?
-				return s.error(c, "unexpected increment of indent")
+				return s.error(c, "unexpected decrement of indent")
 			} else {
-				return s.error(c, "unexpected increment of indent")
+				//go straight to value scan without updating indents
+				return stateBeginValue(s, c)
 			}
 		case parseArrayValue:
 		}
 	}
-	s.indents[0] = s.indents[1] //store current indent
+	// res := stateBeginValue(s, c)
+	// saveLineIndent(s)
+	// s.indents[0] = s.indents[1] //store current indent
 	return stateBeginValue(s, c)
+	// return res
+}
+
+// stateEndLine is a state after '\n' in a non-blank line
+func stateEndLine(s *scanner, c byte) int {
+	s.indents[0] = s.indents[1]
+	//either return or set step
+	return stateBeginLine(s, c)
 }
 
 // TODO: prob can merge with stateBeginLine and track \n here
@@ -325,6 +342,10 @@ func stateBeginValue(s *scanner, c byte) int {
 	// 	return scanSkipSpace
 	// }
 	switch c {
+	case '\n':
+		saveLineIndent(s)
+		s.step = stateBeginLine
+		return scanContinue
 	case '{':
 		s.step = stateBeginStringOrEmpty
 		return s.pushParseState(c, parseObjectKey, scanBeginObject)
@@ -380,10 +401,13 @@ func stateBeginString(s *scanner, c byte) int {
 // stateEndValue is the state after completing a value,
 // such as after reading `{}` or `true` or `["x"`.
 func stateEndValue(s *scanner, c byte) int {
-	if c == ':' {
-		return s.pushParseState(c, parseObjectKey, scanObjectKey)
-	}
 	n := len(s.parseState)
+	if c == ':' {
+		if n == 0 || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
+			s.pushParseState(c, parseObjectKey, scanObjectKey)
+			n++
+		}
+	}
 	if n == 0 {
 		// Completed top-level before the current byte.
 		s.step = stateEndTop
@@ -398,15 +422,10 @@ func stateEndValue(s *scanner, c byte) int {
 	ps := s.parseState[n-1]
 	switch ps {
 	case parseObjectKey:
-		if isWhiteSpace(c) {
+		//if key is unquoted string, then check space in ": ", otherwise check ":"
+		if isWhiteSpace(c) || c == ':' {
 			s.parseState[n-1] = parseObjectValue
 			s.step = stateBeginValueOrEmpty
-			return scanObjectKey
-		}
-		//old, but leave it for flow style checks
-		if c == ':' {
-			s.parseState[n-1] = parseObjectValue
-			s.step = stateBeginValue
 			return scanObjectKey
 		}
 		return s.error(c, "after object key")
@@ -414,18 +433,19 @@ func stateEndValue(s *scanner, c byte) int {
 		if isLineBreak(c) {
 			s.step = stateBeginLine
 			s.parseState[n-1] = parseObjectKey
+			saveLineIndent(s)
 			return scanObjectValue
 		}
 		//old, but leave
-		if c == ',' {
-			s.parseState[n-1] = parseObjectKey
-			s.step = stateBeginString
-			return scanObjectValue
-		}
-		if c == '}' {
-			s.popParseState()
-			return scanEndObject
-		}
+		// if c == ',' {
+		// 	s.parseState[n-1] = parseObjectKey
+		// 	s.step = stateBeginString
+		// 	return scanObjectValue
+		// }
+		// if c == '}' {
+		// 	s.popParseState()
+		// 	return scanEndObject
+		// }
 		return s.error(c, "after object key:value pair")
 	case parseArrayValue:
 		if isLineBreak(c) {
@@ -436,14 +456,14 @@ func stateEndValue(s *scanner, c byte) int {
 			return scanEndArray
 		}
 		//old but leave
-		if c == ',' {
-			s.step = stateBeginValue
-			return scanArrayValue
-		}
-		if c == ']' {
-			s.popParseState()
-			return scanEndArray
-		}
+		// if c == ',' {
+		// 	s.step = stateBeginValue
+		// 	return scanArrayValue
+		// }
+		// if c == ']' {
+		// 	s.popParseState()
+		// 	return scanEndArray
+		// }
 		return s.error(c, "after array element")
 	}
 	return s.error(c, "")
@@ -467,17 +487,26 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 	//stateBeginValue or similar
 	if isSpace(c) {
 		// TODO: check if not xD
-		if len(s.parseState) == 0 {
+		// TODO: push Value and skip right to BeginValue?
+		n := len(s.parseState)
+		// compare indents to check if i'm on a new line
+		//TODO: remove?
+		// if n != 0 && s.indents[1] == s.indents[0] {
+		// 	return s.error(c, "unexpected second object key on the same line")
+		// }
+		if n == 0 || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
 			s.pushParseState(c, parseObjectKey, scanObjectKey)
 		}
 		return stateEndValue(s, c)
 	}
 	if isLineBreak(c) {
-		s.pushParseState(c, parseObjectKey, scanObjectKey)
+		s.pushParseState(c, parseObjectValue, scanObjectValue)
+		// s.pushParseState(c, parseObjectKey, scanObjectKey)
 		//TODO: in stateBeginLine check if indent increased and in state ObjectKey then switch state to ObjectValue
 		//TODO: use step instead of return?? or it reruns BeginLine inside
 		// return stateBeginLine(s, c)
 		s.step = stateBeginLine
+		saveLineIndent(s)
 		return scanObjectKey
 	}
 	//TODO: check c is printable? or valid a string char
@@ -490,6 +519,7 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 func stateInStringUnq(s *scanner, c byte) int {
 	if isLineBreak(c) {
 		s.step = stateBeginLine
+		saveLineIndent(s)
 		return stateEndValue(s, c)
 		// return scanContinue
 	}
