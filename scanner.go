@@ -79,15 +79,7 @@ type scanner struct {
 
 	// Stack of what we're in the middle of - array values, object keys, object values.
 	parseState []int
-	// Number of spaces on each level of nesting. Index corelates with parseState's index (should equal prob)
-	// TODO: remove?
-	spaceState []int
-	// indent state for the current line
-	// TODO: increase when starting the line scan
-	// TODO: remove?
-	indent int
-	//dont need 3 space counters though, but:
-	//first element - stored indent for a non-empty line, second - current counter
+	//first element - stored indent for a non-empty previous line, second - for the current line
 	indents [2]int
 
 	// Error that happened, if any.
@@ -116,7 +108,6 @@ func freeScanner(scan *scanner) {
 	// Avoid hanging on to too much memory in extreme cases.
 	if len(scan.parseState) > 1024 {
 		scan.parseState = nil
-		scan.spaceState = nil
 	}
 	scannerPool.Put(scan)
 }
@@ -166,8 +157,6 @@ func (s *scanner) reset() {
 	// s.step = stateBeginValue
 	s.step = stateBeginLine
 	s.parseState = s.parseState[0:0]
-	s.spaceState = s.spaceState[0:0]
-	s.indent = 0
 	s.indents = [2]int{}
 	s.err = nil
 	s.endTop = false
@@ -187,9 +176,13 @@ func (s *scanner) eof() int {
 	// this assumes no flow style
 	n := len(s.parseState)
 	if n > 0 && s.parseState[n-1] == parseObjectKey {
-		s.err = &SyntaxError{"unexpected end of JSON input", s.bytes}
+		s.err = &SyntaxError{"unexpected end of YAML input", s.bytes}
 		return scanError
 	}
+	// if n > 0 && s.parseState[n-1] == parseArrayValue {
+	// 	s.err = &SyntaxError{"unexpected end of YAML input", s.bytes}
+	// 	return scanError
+	// }
 	return scanEnd
 	// in yaml this is not an error to end in a deep state unless global flow style
 	/*
@@ -208,8 +201,6 @@ func (s *scanner) eof() int {
 // an error state is returned if maxNestingDepth was exceeded, otherwise successState is returned.
 func (s *scanner) pushParseState(c byte, newParseState int, successState int) int {
 	s.parseState = append(s.parseState, newParseState)
-	s.spaceState = append(s.spaceState, 0)
-	s.indent = 0
 	if len(s.parseState) <= maxNestingDepth {
 		return successState
 	}
@@ -221,8 +212,6 @@ func (s *scanner) pushParseState(c byte, newParseState int, successState int) in
 func (s *scanner) popParseState() {
 	n := len(s.parseState) - 1
 	s.parseState = s.parseState[0:n]
-	s.spaceState = s.spaceState[0:n]
-	s.indent = 0
 	if n == 0 {
 		s.step = stateEndTop
 		s.endTop = true
@@ -243,15 +232,6 @@ func isLineBreak(c byte) bool {
 
 func isWhiteSpace(c byte) bool {
 	return c <= ' ' && (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-}
-
-func incSpaceState(s *scanner) {
-	n := len(s.spaceState)
-	if n == 0 {
-		s.error(' ', "unexpected empty s.spaceState")
-	}
-	s.spaceState[n-1]++
-	s.indents[1]++
 }
 
 // stateBeginLine is the state after reading `\n` or at the beginning.
@@ -288,6 +268,17 @@ func stateBeginLine(s *scanner, c byte) int {
 				return s.error(c, "unexpected object value when expecting object key")
 			}
 		case parseArrayValue:
+			switch icmp {
+			case -1:
+				if s.indents[0]-s.indents[1] == 2 {
+					return stateBeginArrayValue(s, c)
+				}
+				//TODO: check if I can pop state and (may be) there is an object above
+				return s.error(c, "unexpected end of array")
+			case 0, 1:
+				//TODO: need more tests with nesting inside object when icmp == 0
+				return s.error(c, "unexpected end of array")
+			}
 		}
 	}
 	return stateBeginValue(s, c)
@@ -311,6 +302,11 @@ func stateBeginValueOrEmpty(s *scanner, c byte) int {
 	if c == ']' {
 		return stateEndValue(s, c)
 	}
+	if c == '}' {
+		n := len(s.parseState)
+		s.parseState[n-1] = parseObjectValue
+		return stateEndValue(s, c)
+	}
 	return stateBeginValue(s, c)
 }
 
@@ -326,7 +322,7 @@ func stateBeginValue(s *scanner, c byte) int {
 	case '\n':
 		return stateEndLine(s, c)
 	case '{':
-		s.step = stateBeginStringOrEmpty
+		s.step = stateBeginValueOrEmpty
 		return s.pushParseState(c, parseObjectKey, scanBeginObject)
 	case '[':
 		s.step = stateBeginValueOrEmpty
@@ -357,11 +353,12 @@ func stateBeginStringOrEmpty(s *scanner, c byte) int {
 	if isSpace(c) {
 		return scanSkipSpace
 	}
-	if c == '}' {
-		n := len(s.parseState)
-		s.parseState[n-1] = parseObjectValue
-		return stateEndValue(s, c)
-	}
+	//moved to stateBeginValueOrEmpty
+	// if c == '}' {
+	// 	n := len(s.parseState)
+	// 	s.parseState[n-1] = parseObjectValue
+	// 	return stateEndValue(s, c)
+	// }
 	return stateBeginString(s, c)
 }
 
@@ -407,40 +404,40 @@ func stateEndValue(s *scanner, c byte) int {
 			s.step = stateBeginValueOrEmpty
 			return scanObjectKey
 		}
+		if c == '{' || c == '[' {
+			s.parseState[n-1] = parseObjectValue
+			return stateBeginValueOrEmpty(s, c)
+		}
 		return s.error(c, "after object key")
 	case parseObjectValue:
 		if isLineBreak(c) {
 			s.parseState[n-1] = parseObjectKey
 			return stateEndLine(s, c)
 		}
-		//old, but leave
-		// if c == ',' {
-		// 	s.parseState[n-1] = parseObjectKey
-		// 	s.step = stateBeginString
-		// 	return scanObjectValue
-		// }
-		// if c == '}' {
-		// 	s.popParseState()
-		// 	return scanEndObject
-		// }
+		//TODO: need a flag to track the flow-style state in s???
+		if c == ',' {
+			s.parseState[n-1] = parseObjectKey
+			s.step = stateBeginValueOrEmpty
+			return scanObjectValue
+		}
+		if c == '}' {
+			s.popParseState()
+			return scanEndObject
+		}
 		return s.error(c, "after object key:value pair")
 	case parseArrayValue:
 		if isLineBreak(c) {
-			//TODO: need to track the correctness of indices though (below)
-			// s.step = stateBeginValue
-			// return scanArrayValue
+			return stateEndLine(s, c)
+		}
+		//TODO: need a flag to track the flow-style state in s???
+		if c == ',' {
+			s.step = stateBeginValueOrEmpty
+			return scanArrayValue
+		}
+		if c == ']' {
 			s.popParseState()
 			return scanEndArray
 		}
-		//old but leave
-		// if c == ',' {
-		// 	s.step = stateBeginValue
-		// 	return scanArrayValue
-		// }
-		// if c == ']' {
-		// 	s.popParseState()
-		// 	return scanEndArray
-		// }
 		return s.error(c, "after array element")
 	}
 	return s.error(c, "")
@@ -450,7 +447,7 @@ func stateEndValue(s *scanner, c byte) int {
 // such as after reading `{}` or `[1,2,3]`.
 // Only space characters should be seen now.
 func stateEndTop(s *scanner, c byte) int {
-	if !isSpace(c) {
+	if !isWhiteSpace(c) {
 		// Complain about non-space byte on next call.
 		s.error(c, "after top-level value")
 	}
@@ -459,29 +456,20 @@ func stateEndTop(s *scanner, c byte) int {
 
 // stateKeyOrUnq is the state after reading ':' in an unquoted string
 func stateKeyOrUnq(s *scanner, c byte) int {
-	//TODO: it seems all wrong here. I'm always one step behind. If I see ": " i should switch to scanObjectValue already
-	//skipping the scanObjectKey, because the key has already been scanned. If so then replace stateEndValue with
-	//stateBeginValue or similar
+	n := len(s.parseState)
 	if isSpace(c) {
-		// TODO: check if not xD
-		// TODO: push Value and skip right to BeginValue?
-		n := len(s.parseState)
-		// compare indents to check if i'm on a new line
-		//TODO: remove?
-		// if n != 0 && s.indents[1] == s.indents[0] {
-		// 	return s.error(c, "unexpected second object key on the same line")
-		// }
+		//care here
 		if n == 0 || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
 			s.pushParseState(c, parseObjectKey, scanObjectKey)
 		}
 		return stateEndValue(s, c)
 	}
+	switch c {
+	case '{', '}', '[', ']', ',':
+		return stateEndValue(s, c)
+	}
 	if isLineBreak(c) {
 		s.pushParseState(c, parseObjectValue, scanObjectValue)
-		// s.pushParseState(c, parseObjectKey, scanObjectKey)
-		//TODO: in stateBeginLine check if indent increased and in state ObjectKey then switch state to ObjectValue
-		//TODO: use step instead of return?? or it reruns BeginLine inside
-		// return stateBeginLine(s, c)
 		return stateEndLine(s, c)
 	}
 	//TODO: check c is printable? or valid a string char
@@ -489,19 +477,31 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 	return scanContinue
 }
 
-// TODO: join with stateInString??
+func isEndOfUnq(c byte) bool {
+	//also ':' is but it is checked separately usually
+	switch c {
+	case '{', '}', '[', ']', ',', '&', '*', '#', '?', '|', '-', '<', '>', '=', '!', '%', '@':
+		return true
+	}
+	return false
+}
+
 // stateInStringUnq is the state after reading f,t (and not fa, tr following
 func stateInStringUnq(s *scanner, c byte) int {
 	if isLineBreak(c) {
-		// s.step = stateEndLine
 		return stateEndValue(s, c)
-		// return scanContinue
 	}
 	// Move to stateEndValue?
 	if c == ':' {
 		s.step = stateKeyOrUnq
 		return scanContinue
 	}
+
+	switch c {
+	case '}', ']', ',':
+		return stateEndValue(s, c)
+	}
+
 	if c == '\\' {
 		s.step = stateInStringEsc
 		return scanContinue
@@ -581,6 +581,24 @@ func stateInStringEscU123(s *scanner, c byte) int {
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
+// stateBeginArrayValue is the state expecting '-' in "- "
+func stateBeginArrayValue(s *scanner, c byte) int {
+	if c == '-' {
+		s.step = stateBeginArrayValueS
+		return scanContinue
+	}
+	return s.error(c, "in array value prefix")
+}
+
+// stateBeginArrayValueS is the state expecting ' ' in "- "
+func stateBeginArrayValueS(s *scanner, c byte) int {
+	if c == ' ' {
+		s.step = stateBeginValueOrEmpty
+		return scanContinue
+	}
+	return s.error(c, "in array value prefix")
+}
+
 // stateNegOrArray is the state after reading `-` during a number or array element
 func stateNegOrArray(s *scanner, c byte) int {
 	if c == '0' {
@@ -591,11 +609,19 @@ func stateNegOrArray(s *scanner, c byte) int {
 		s.step = state1
 		return scanContinue
 	}
-	if c == ' ' {
-		// TODO: check indent & s.spaceState indent and then push or not or error
-		s.pushParseState(c, parseArrayValue, scanArrayValue)
-		s.indent += 2 //'-' and ' '
-		s.step = stateBeginValueOrEmpty
+	if isSpace(c) {
+		n := len(s.parseState)
+		//care here
+		s.indents[1] += 2 //'-' and ' '
+		if n > 0 && s.parseState[n-1] == parseArrayValue && s.indents[1] == s.indents[0] {
+			s.step = stateBeginValueOrEmpty
+			return scanContinue
+		}
+		if n == 0 { // || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
+			s.pushParseState(c, parseArrayValue, scanArrayValue)
+			s.step = stateBeginValueOrEmpty
+		}
+		//TODO: check other conditions xD
 		return scanContinue
 	}
 	return s.error(c, "in numeric literal")

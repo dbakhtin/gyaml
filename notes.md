@@ -16,7 +16,11 @@
 # TIP OF THE DAY
 * Use 'gc' to un/comment region
 
+# Lint & vet
+* Hotkey for GoLint current file
+
 # Scaner
+* need more tests with objects in arrays, arrays in objects, arrays of arrays, etc
 * in stateEndValue when state = ObjectValue implement the ',' logic for a \n
 * Start from beginning, don't use json code, but compare if needed
 * I have no clear criteria of stateEndValue, because no closing brackets, etc

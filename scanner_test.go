@@ -113,24 +113,6 @@ func TestValidQuoted(t *testing.T) {
 	})
 }
 
-func TestValidMap2(t *testing.T) {
-	//Worked
-	t.Run("non-nesting", func(t *testing.T) {
-		tests := []struct {
-			data string
-			ok   bool
-		}{
-			{"v:\n  u: 2", true},
-			{"v:\n  u:\n  2", false},
-			{"v:\n  u: 2", true},
-		}
-		for _, tt := range tests {
-			if ok := Valid([]byte(tt.data)); ok != tt.ok {
-				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
-			}
-		}
-	})
-}
 func TestValidMap(t *testing.T) {
 	//Worked
 	t.Run("non-nesting", func(t *testing.T) {
@@ -178,20 +160,55 @@ func TestValidMap(t *testing.T) {
 	})
 }
 
+func TestValidSlice2(t *testing.T) {
+	t.Run("nested", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"- a: b\n- c: d", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}
+
 func TestValidSlice(t *testing.T) {
-	t.Run("strings", func(t *testing.T) {
+	t.Run("simple", func(t *testing.T) {
 		tests := []struct {
 			data string
 			ok   bool
 		}{
 			{"- 1", true},
 			{"- 1\n", true},
-			// {"- 1\n- s", true},
-			// {"- 1\n-2", false},
-			// {"- 1\n- 2", true},
-			// {"- a\n- b", true},
-			// {"- true\n- false", true},
-			// {"- null\n- \"c\"", true},
+			{"- 1\n- s", true},
+			{"- 1\n2", false},
+			{"- 1\n-2", false},
+			{"- 1\n -2", false},
+			{"- 1\n  -2", false},
+			{"- 1\n  2", false},
+			{"- 1\n   2", false},
+			{"- 1\n- 2", true},
+			{"- a\n- b", true},
+			{"- true\n- false", true},
+			{"- null\n- \"c\"", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+
+	t.Run("nested", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"- a: b\n- c: d", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -206,27 +223,24 @@ func TestValid(t *testing.T) {
 		data string
 		ok   bool
 	}{
-		// {"1", true},
-		// {"false", true},
-		// {"foo", true},
-		// {"foo bar", true},
-		// {"foo bar:", true},
-		// {" foo bar", true},
-		// {"foo bar\n", true},
-		// {`"foo"`, true},
-		// {`}{`, false},
-		// {`{]`, false},
-		// {`{}`, true},
+		{"1", true},
+		{"false", true},
+		{"foo", true},
+		{"foo bar", true},
+		{"foo bar:", true},
+		{" foo bar", true},
+		{"foo bar\n", true},
+		{`"foo"`, true},
+		{`}{`, false},
+		{`{]`, false},
+		{`{}`, true},
 		{"v:\n  s", true},
 		{"v:\ns", false},
 		{"v:\n s", true},
 		{"v:\n  s", true},
-		// {"f:\n  b", true},
-		// {"foo:\n  bar", true},
-		// 		{`foo:\n bar`, true},
-		// 		{`{foo: bar}`, true},
-		// 		{`{"foo":"bar"}`, true},
-		// 		{`{"foo":"bar","bar":{"baz":["qux"]}}`, true},
+		{"f:\n  b", true},
+		{"foo:\n  bar", true},
+		{`foo:\n bar`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.data, func(t *testing.T) {
@@ -236,28 +250,54 @@ func TestValid(t *testing.T) {
 		})
 	}
 }
+
+func TestValidFlow(t *testing.T) {
+	t.Run("flow global", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{`{foo: bar}`, true},
+			{`{"foo": "bar"}`, true},
+			{`{"foo":"bar"}`, true},
+			{`{"foo":}`, true},
+			{`{"foo"}`, false},
+			{`{"foo":"bar", "bar": "baz"}`, true},
+			{`{fo: ba, re: {mo: [qu]}}`, true},
+			{`{fo: ba, re:{mo:[qu]}}`, true},
+			{`{fo: ba, re:{mo:[qu,no]}}`, true},
+			{`{fo: ba, re{mo: [qu]}}`, false},
+			{`{fo: ba, re:{mo: [qu, no]}}`, true},
+			{`{fo:ba, re:{mo:[qu]}}`, false},
+			{`{"foo": "bar","bar": {"baz": ["qux"]}}`, true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+	t.Run("flow local", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{`{foo: bar}`, true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}
+
 func TestValidJson(t *testing.T) {
 	tests := []struct {
 		data string
 		ok   bool
 	}{
-		// {"1", true},
-		// {"false", true},
-		// {"foo", true},
-		// {"foo bar", true},
-		// {"foo bar:", true},
-		// {" foo bar", true},
-		// {"foo bar\n", true},
-		// {`"foo"`, true},
-		// {`}{`, false},
-		// {`{]`, false},
-		// {`{}`, true},
-		{"{\"f\":\"b\"}", true},
-		// {"foo:\n  bar", true},
-		// 		{`foo:\n bar`, true},
-		// 		{`{foo: bar}`, true},
-		// 		{`{"foo":"bar"}`, true},
-		// 		{`{"foo":"bar","bar":{"baz":["qux"]}}`, true},
+		{"1", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.data, func(t *testing.T) {
@@ -267,24 +307,3 @@ func TestValidJson(t *testing.T) {
 		})
 	}
 }
-
-// func TestValidFlow(t *testing.T) {
-// 	tests := []struct {
-// 		data string
-// 		ok   bool
-// 	}{
-// 		{`{foo: bar}`, true},
-// 		{`{"foo": "bar"}`, true},
-// 		{`{"foo":"bar"}`, true},
-// 		{`{foo: bar, bar: {baz: [qux]}}`, true},
-// 		{`{foo: bar, bar:{baz:[qux]}}`, true},
-// 		{`{"foo": "bar","bar": {"baz": ["qux"]}}`, true},
-// 	}
-// 	for _, tt := range tests {
-// 		t.Run(tt.data, func(t *testing.T) {
-// 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
-// 				t.Errorf("Valid(`%s`) = %v, want %v", tt.data, ok, tt.ok)
-// 			}
-// 		})
-// 	}
-// }
