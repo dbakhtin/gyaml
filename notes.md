@@ -21,6 +21,9 @@
 
 # Scaner
 * BIG TODO: need spaceState []int to track spaces on each nesting. Without this I can't pop 2+ levels
+* BIG TODO: add ObjectValueEmpty parse state (for parseState) to track if I have met a value. The difference with ObjectValue will help to track errors
+* BIG TODO: create separate state values for flow style this will make code more clean
+    when I have already parsed value and see another one like in a failing test. But commit before or create branch
 * need more tests with objects in arrays, arrays in objects, arrays of arrays, etc
 * in stateEndValue when state = ObjectValue implement the ',' logic for a \n
 * Start from beginning, don't use json code, but compare if needed
