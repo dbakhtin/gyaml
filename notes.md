@@ -20,6 +20,7 @@
 * Hotkey for GoLint current file
 
 # Scaner
+* BIG TODO: need spaceState []int to track spaces on each nesting. Without this I can't pop 2+ levels
 * need more tests with objects in arrays, arrays in objects, arrays of arrays, etc
 * in stateEndValue when state = ObjectValue implement the ',' logic for a \n
 * Start from beginning, don't use json code, but compare if needed

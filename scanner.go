@@ -29,12 +29,16 @@ func Valid(data []byte) bool {
 	return checkValid(data, scan) == nil
 }
 
+var debu []byte
+
 // checkValid verifies that data is valid JSON-encoded data.
 // scan is passed in for use by checkValid to avoid an allocation.
 // checkValid returns nil or a SyntaxError.
 func checkValid(data []byte, s *scanner) error {
+	debu = []byte{}
 	s.reset()
 	for _, c := range data {
+		debu = append(debu, c)
 		s.bytes++
 		if s.step(s, c) == scanError {
 			return s.err
@@ -43,6 +47,7 @@ func checkValid(data []byte, s *scanner) error {
 	if s.eof() == scanError {
 		return s.err
 	}
+	_ = debu
 	return nil
 }
 
@@ -263,15 +268,24 @@ func stateBeginLine(s *scanner, c byte) int {
 			switch icmp {
 			case -1:
 				// error now but test later may be just pop?
+				// s.popParseState()
+				// return stateBeginLine(s, c)
 				return s.error(c, "unexpected decrement of indent")
 			case 0:
-				return s.error(c, "unexpected object value when expecting object key")
+				//either array or error, can safely push array state
+				s.pushParseState(c, parseArrayValue, scanBeginArray)
+				return stateBeginArrayValue(s, c)
 			}
 		case parseArrayValue:
 			switch icmp {
 			case -1:
 				if s.indents[0]-s.indents[1] == 2 {
 					return stateBeginArrayValue(s, c)
+				}
+				if s.indents[0]-s.indents[1] > 2 {
+					//pop & recheck
+					s.popParseState()
+					return stateBeginLine(s, c)
 				}
 				//TODO: check if I can pop state and (may be) there is an object above
 				return s.error(c, "unexpected end of array")
@@ -458,8 +472,11 @@ func stateEndTop(s *scanner, c byte) int {
 func stateKeyOrUnq(s *scanner, c byte) int {
 	n := len(s.parseState)
 	if isSpace(c) {
-		//care here
-		if n == 0 || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
+		// if nested object key
+		// if n == 0 || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
+		if n == 0 || //if top level object key
+			s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] || // if nested object key
+			s.parseState[n-1] == parseArrayValue && s.indents[1] >= s.indents[0] {
 			s.pushParseState(c, parseObjectKey, scanObjectKey)
 		}
 		return stateEndValue(s, c)
@@ -593,7 +610,9 @@ func stateBeginArrayValue(s *scanner, c byte) int {
 // stateBeginArrayValueS is the state expecting ' ' in "- "
 func stateBeginArrayValueS(s *scanner, c byte) int {
 	if c == ' ' {
+		//TODO: push
 		s.step = stateBeginValueOrEmpty
+		s.indents[1] += 2
 		return scanContinue
 	}
 	return s.error(c, "in array value prefix")
@@ -613,11 +632,24 @@ func stateNegOrArray(s *scanner, c byte) int {
 		n := len(s.parseState)
 		//care here
 		s.indents[1] += 2 //'-' and ' '
-		if n > 0 && s.parseState[n-1] == parseArrayValue && s.indents[1] == s.indents[0] {
-			s.step = stateBeginValueOrEmpty
-			return scanContinue
+		// if n > 0 && s.parseState[n-1] == parseArrayValue && s.indents[1] == s.indents[0] {
+		// 	s.step = stateBeginValueOrEmpty
+		// 	return scanContinue
+		// }
+		// TODO: check missing conditions xD
+		if n > 0 && s.parseState[n-1] == parseArrayValue {
+			if s.indents[1] == s.indents[0] {
+				s.step = stateBeginValueOrEmpty
+				return scanContinue
+			}
+			if s.indents[1] < s.indents[0] {
+				s.popParseState()
+				s.step = stateBeginValueOrEmpty
+				return scanContinue
+			}
 		}
-		if n == 0 { // || s.parseState[n-1] == parseObjectValue && s.indents[1] > s.indents[0] {
+		if n == 0 ||
+			(s.parseState[n-1] == parseArrayValue || s.parseState[n-1] == parseObjectValue) && s.indents[1] > s.indents[0] {
 			s.pushParseState(c, parseArrayValue, scanArrayValue)
 			s.step = stateBeginValueOrEmpty
 		}

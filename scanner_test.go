@@ -113,6 +113,21 @@ func TestValidQuoted(t *testing.T) {
 	})
 }
 
+func TestValidMap2(t *testing.T) {
+	t.Run("with nesting arrays", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"v:\n- a:\n  - b\n- c: d", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}
 func TestValidMap(t *testing.T) {
 	//Worked
 	t.Run("non-nesting", func(t *testing.T) {
@@ -158,15 +173,17 @@ func TestValidMap(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestValidSlice2(t *testing.T) {
-	t.Run("nested", func(t *testing.T) {
+	t.Run("with nesting arrays", func(t *testing.T) {
 		tests := []struct {
 			data string
 			ok   bool
 		}{
-			{"- a: b\n- c: d", true},
+			{"v:\n- a\n- b", true},
+			{"v:\n - a\n - b", true},
+			{"v:\n - a\n- b", false},
+			{"v:\n - a\n  - b", false},
+			{"v:\n- a: b\n- c: d", true},
+			{"v:\n- a:\n  - b\n- c: d", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -174,6 +191,20 @@ func TestValidSlice2(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestValidSlice2(t *testing.T) {
+	tests := []struct {
+		data string
+		ok   bool
+	}{
+		{"- a: b\n  c: d", true},
+	}
+	for _, tt := range tests {
+		if ok := Valid([]byte(tt.data)); ok != tt.ok {
+			t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+		}
+	}
 }
 
 func TestValidSlice(t *testing.T) {
@@ -209,6 +240,13 @@ func TestValidSlice(t *testing.T) {
 			ok   bool
 		}{
 			{"- a: b\n- c: d", true},
+			{"- a: b\n-c: d", false},
+			{"- a: b\n\"-c\": d", false},
+			{"\"-a\": b\n\"-c\": d", true},
+			{"- - 1\n  - 2\n- - 3", true},
+			{"- - a: b\n  - c: d\n- - e: f", true},
+			{"- a: b\n  c: d", true},
+			{"- - a: b\n    c: d", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
