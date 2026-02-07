@@ -20,37 +20,19 @@
 * Hotkey for GoLint current file
 
 # Scaner
-* BIG TODO: need spaceState []int to track spaces on each nesting. Without this I can't pop 2+ levels
-* BIG TODO: add ObjectValueEmpty parse state (for parseState) to track if I have met a value. The difference with ObjectValue will help to track errors
-* BIG TODO: create separate state values for flow style this will make code more clean
-    when I have already parsed value and see another one like in a failing test. But commit before or create branch
-* need more tests with objects in arrays, arrays in objects, arrays of arrays, etc
+* TODO tomorrow try this:
+** Commit
+** Join stateNeg with stateDash & BeginArray
+** Check new document test & other pass
+** Commit or branch again
+** This will be a part of big code optimization
+** BeginLine only cares abount counting indents and then calls BeginValue
+*** BeginArray checks if it is already inside array & indents equal then dont push otherwise if it increases then push, decreases pop & call transition check
+**** Transition check verifies if in object and switches value to key - what is currently done in BeginLine. Can also try to merge it with some checks in EndValue
+
+* TODO: test a short real example
+* TODO: create separate state values for flow style this will make code more clean?
 * in stateEndValue when state = ObjectValue implement the ',' logic for a \n
-* Start from beginning, don't use json code, but compare if needed
-* I have no clear criteria of stateEndValue, because no closing brackets, etc
-** This means I need to reconsider checks inside eof()
-* Count indents
-* Entry point should be stateNewLine
-** Inc space counter if space
-** When string/number/unqstr met push parseState <- scalar (add to consts)
-*** When ':' met check if next is space. if yes then substitute scalar with objectKey. If not scalar then error. If not space then continue str
-    the end of the unquoted string is only a ": "
-**** ": " -> replace objectKey with objectValue and parse value. Good to check if scalar contains '\n' then it's error, but can leave for later tuning.
-***** parse value. if ': ' met in line then error. if '\n' met then
-****** save last indent, reset current and inc space count. if indents equal then replace objectValue with objectKey and repeat above. If not then error 
-        with one exception (later) if ":   \n" then objectValue was empty and expect a greater indent on new line with object value and increase nestedlevel (push).
-        if indent decreased then pop or error.
-**** eof -> only scalar in parseState, pop it and finish OK
-* test with empty lines consisting of spaces + \n inside an object or array
-* test with ": \n" for object keys
-
-* Booleans
-** remove? scanner does not care about the difference between bools & unquoted strings
-* Slices
-** count indents. if "- " met then begins array (push) and parse value till '\n' then stateNewLine
-** count indents. If less than prev then pop. if greater then error. if "- " met and same indent then parse value till \n then stateNewLine. if not met then error.
-** if eof() pop state & and check again (test this with multiple nesting)
-
 
 # TODO
 * Go TDD way: write red test -> fix source, enhance test -> fix source and so on.
@@ -59,6 +41,9 @@
 * Clear api surface (see: options, etc) and compare to encoding/json api surface
 * Fix package documentation
 * Polish cmd/main.go memory & performance test for readability
+
+# Encoder
+* folded style multiline?
 
 # Decoder
 * fuzz_test.go
