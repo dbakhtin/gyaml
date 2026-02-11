@@ -12,7 +12,8 @@ func TestValidCustom(t *testing.T) {
 			ok   bool
 		}{
 			// {"v: \nu:", true},
-			{"v:\n a:\n  b:\n  - 1\nu: 2", true},
+			{"- a: b\n- 1", true},
+			{"v:\n u:\n  - 1\n - 2", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -192,7 +193,8 @@ func TestValidMap(t *testing.T) {
 			{"v:\n - a\n- b", false},
 			{"v:\n - a\n  - b", false},
 			{"v:\n- a: b\n- c: d", true},
-			// {"v:\n- a:\n  - b\n- c: d", true},
+			{"v:\n u:\n  - 1\n - 2", false},
+			{"v:\n- a:\n  - b\n- c: d", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -249,6 +251,7 @@ func TestValidSlice(t *testing.T) {
 			ok   bool
 		}{
 			{"- a: b\n- c: d", true},
+			{"- a: b\n- 1", true},
 			{"- a: b\n-c: d", false},
 			{"- a: b\n\"-c\": d", false},
 			{"\"-a\": b\n\"-c\": d", true},
@@ -315,6 +318,8 @@ func TestValidFlow(t *testing.T) {
 			ok   bool
 		}{
 			{"a:\n {foo: bar}", true},
+			{"- [a, b]\n- [c, d]", true},
+			{"v:\n- [a, b]\n- [c, d]", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {

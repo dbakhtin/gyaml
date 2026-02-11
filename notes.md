@@ -21,10 +21,6 @@
 
 # Scaner
 * TODO tomorrow try this:
-** Commit
-** Join stateNeg with stateDash & BeginArray
-** Check new document test & other pass
-** Commit or branch again
 ** This will be a part of big code optimization
 ** BeginLine only cares abount counting indents and then calls BeginValue
 *** BeginArray checks if it is already inside array & indents equal then dont push otherwise if it increases then push, decreases pop & call transition check

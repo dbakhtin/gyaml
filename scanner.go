@@ -252,10 +252,6 @@ func indentDiff(s *scanner) int {
 
 // stateBeginLine is the state after reading `\n` or at the beginning.
 func stateBeginLine(s *scanner, c byte) int {
-	// if c == '-' && s.idn == 0 {
-	// 	s.step = stateDash2
-	// 	return scanContinue
-	// }
 	if isLineBreak(c) {
 		s.idn = 0
 		return scanSkipSpace
@@ -297,17 +293,14 @@ func stateBeginLine(s *scanner, c byte) int {
 			case idiff == 0:
 				//either array or object value was empty and this is the beginning of another key
 				if c == '-' {
-					s.pushState(c, parseArrayValue, scanBeginArray)
-					return stateBeginArrayValue(s, c)
+					s.step = stateBeginArrayValueS
+					return scanContinue
 				}
 				s.states[n-1] = parseObjectKey
 			}
 		case parseArrayValue:
-			// compare with |2| here, because we haven't parsed "- " on the current line yet. But if there is no "- " at all then
-			// stateBeginArrayValue will return an error
+			// 2 means possible "- "
 			switch {
-			case idiff == -2:
-				return stateBeginArrayValue(s, c)
 			case idiff < -2:
 				//pop & check if inside object. If true swap object state to parseKey, because this array was a value
 				//already. Helps with catching border cases.
@@ -318,18 +311,16 @@ func stateBeginLine(s *scanner, c byte) int {
 					s.states[n-1] = parseObjectKey
 				}
 				return stateBeginLine(s, c)
-			case idiff == -1:
+			case idiff == -2:
+				return stateBeginArrayValue(s, c)
+			default:
 				//TODO: check if can pop state and (may be) there is an object in stack above this
-				return s.error(c, "unexpected end of array")
-			case idiff >= 0:
-				//TODO: need more tests with nesting inside object when idiff == 0
 				return s.error(c, "unexpected end of array")
 			}
 		case parseMultiLineValue:
 			switch {
 			case idiff < 0:
 				//pop
-				//TODO: merge these pops with EndValue somehow?
 				s.popState()
 				n--
 				if n > 0 && s.states[n-1] == parseObjectValue {
@@ -343,7 +334,6 @@ func stateBeginLine(s *scanner, c byte) int {
 }
 
 // stateEndLine is a state when c == '\n' in a non-blank line
-// TODO: remove. The only value here is: s.curindent = 0
 func stateEndLine(s *scanner, _ byte) int {
 	s.idn = 0
 	s.step = stateBeginLine
@@ -351,8 +341,7 @@ func stateEndLine(s *scanner, _ byte) int {
 	return scanContinue
 }
 
-// TODO: prob can merge with stateBeginLine and track \n here
-// stateBeginValueOrEmpty is the state after reading `[`.
+// stateBeginValueOrEmpty is the state when any token or space is expected
 func stateBeginValueOrEmpty(s *scanner, c byte) int {
 	if isSpace(c) {
 		return scanSkipSpace
@@ -368,7 +357,7 @@ func stateBeginValueOrEmpty(s *scanner, c byte) int {
 	return stateBeginValue(s, c)
 }
 
-// stateBeginValue is the state at the beginning of the input.
+// stateBeginValue is the state at the beginning of any token
 func stateBeginValue(s *scanner, c byte) int {
 	switch c {
 	case '\n':
@@ -378,12 +367,13 @@ func stateBeginValue(s *scanner, c byte) int {
 		return s.pushState(c, parseObjectKey, scanBeginObject)
 	case '[':
 		s.step = stateBeginValueOrEmpty
-		return s.pushState(c, parseArrayValue, scanBeginArray)
+		return pushArrayState(s, c)
+		// return s.pushState(c, parseArrayValue, scanBeginArray)
 	case '"':
 		s.step = stateInString
 		return scanBeginLiteral
 	case '-':
-		s.step = stateNeg
+		s.step = stateHyphen
 		return scanBeginLiteral
 	case '0': // beginning of 0.123 or 0x1f
 		s.step = state0Begin
@@ -716,6 +706,26 @@ func stateEndDoc3(s *scanner, c byte) int {
 	return s.error(c, "in document separator")
 }
 
+func pushArrayState(s *scanner, c byte) int {
+	n := len(s.states)
+	s.idn += 2 //"- "
+	idiff := indentDiff(s)
+	// if top level first element or nested inside object or array of arrays
+	if n == 0 ||
+		idiff > 0 &&
+			(s.states[n-1] == parseArrayValue || s.states[n-1] == parseObjectValue) {
+		s.pushState(c, parseArrayValue, scanArrayValue)
+		s.step = stateBeginValueOrEmpty
+		return scanContinue
+	}
+	//already in array
+	if n > 0 && s.states[n-1] == parseArrayValue && idiff == 0 {
+		s.step = stateBeginValueOrEmpty
+		return scanContinue
+	}
+	return s.error(c, "in push array state")
+}
+
 // stateBeginArrayValue is the state expecting '-' in "- "
 func stateBeginArrayValue(s *scanner, c byte) int {
 	if c == '-' {
@@ -728,12 +738,7 @@ func stateBeginArrayValue(s *scanner, c byte) int {
 // stateBeginArrayValueS is the state expecting ' ' in "- "
 func stateBeginArrayValueS(s *scanner, c byte) int {
 	if c == ' ' {
-		s.step = stateBeginValueOrEmpty
-		s.idn += 2
-		//force indent storage to dodge "- a:\n" case. Original idea to store indent on linebreak does not work here. May
-		//be should optimize this
-		s.indents[len(s.indents)-1] = s.idn
-		return scanContinue
+		return pushArrayState(s, c)
 	}
 	if c == '-' && s.idn == 0 {
 		s.step = stateEndDoc2
@@ -742,47 +747,23 @@ func stateBeginArrayValueS(s *scanner, c byte) int {
 	return s.error(c, "in array value prefix")
 }
 
-// stateNeg is the state after reading `-` during a number or array element
-func stateNeg(s *scanner, c byte) int {
-	if c == '0' {
+// stateHyphen is the state after reading `-` during a number or array element
+func stateHyphen(s *scanner, c byte) int {
+	switch {
+	case c == '0':
 		s.step = state0Begin
 		return scanContinue
-	}
-	if '1' <= c && c <= '9' {
+	case '1' <= c && c <= '9':
 		s.step = state1
 		return scanContinue
-	}
-	if isSpace(c) {
-		n := len(s.states)
-		//care here
-		s.idn += 2 //'-' and ' '
-		// TODO: check missing conditions xD
-		idiff := indentDiff(s)
-		if n > 0 && s.states[n-1] == parseArrayValue {
-			if idiff == 0 {
-				s.step = stateBeginValueOrEmpty
-				return scanContinue
-			}
-			if idiff < 0 {
-				s.popState()
-				s.step = stateBeginValueOrEmpty
-				return scanContinue
-			}
-		}
-		if n == 0 ||
-			(s.states[n-1] == parseArrayValue || s.states[n-1] == parseObjectValue) && idiff > 0 {
-			s.pushState(c, parseArrayValue, scanArrayValue)
-			s.step = stateBeginValueOrEmpty
-		}
-		//TODO: check other conditions xD
-		return scanContinue
-	}
-	//document separator "\n---\n"check
-	if c == '-' && s.idn == 0 {
+	case c == ' ':
+		return pushArrayState(s, c)
+	case c == '-' && s.idn == 0:
 		s.step = stateEndDoc2
 		return scanContinue
+	default:
+		return s.error(c, "in numeric literal")
 	}
-	return s.error(c, "in numeric literal")
 }
 
 // state1 is the state after reading a non-zero integer during a number,
@@ -808,30 +789,27 @@ func state0(s *scanner, c byte) int {
 	return stateEndValue(s, c)
 }
 
-// state0Begin is the state after reading `0` at the beginning of the value. Compared to state0 it can't fire inside
-// number
+// state0Begin is the state after reading `0` at the beginning of the value. Compared to state0 it can't be triggered inside number
 func state0Begin(s *scanner, c byte) int {
-	if c == '.' {
+	switch c {
+	case '.':
 		s.step = stateDot
 		return scanContinue
-	}
-	if c == 'b' {
+	case 'b':
 		s.step = stateBin
 		return scanContinue
-	}
-	if c == 'o' {
+	case 'o':
 		s.step = stateOct
 		return scanContinue
-	}
-	if c == 'x' {
+	case 'x':
 		s.step = stateHex
 		return scanContinue
-	}
-	if c == 'e' || c == 'E' {
+	case 'e', 'E':
 		s.step = stateE
 		return scanContinue
+	default:
+		return stateEndValue(s, c)
 	}
-	return stateEndValue(s, c)
 }
 
 // stateBin is the state after reading 0b - start of binary integer
