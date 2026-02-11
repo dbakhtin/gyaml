@@ -43,6 +43,9 @@ func checkValid(data []byte, s *scanner) error {
 		if s.step(s, c) == scanError {
 			return s.err
 		}
+		if !isWhiteSpace(c) {
+			s.lastc = c
+		}
 	}
 	if s.eof() == scanError {
 		return s.err
@@ -88,6 +91,9 @@ type scanner struct {
 	indents []int
 	//calculated indent for the current state
 	idn int
+	//last meaningful (non-whitespace) value of byte input. Though it goes against strict state machine definition it
+	//may help in some border cases. For example to distinguish ':' in "a: b" (object key + value) and "a:b" (unquoted string)
+	lastc byte
 
 	// Error that happened, if any.
 	err error
@@ -181,30 +187,13 @@ func (s *scanner) eof() int {
 	if s.endTop {
 		return scanEnd
 	}
-	// s.step(s, ' ')
-	// arrays in yaml (unless in flow mode) don't have a obvious end symbol. So if we reached eof and parseState contains parseArrayValue just pop it
-	// this assumes no flow style
-	n := len(s.states)
-	if n > 0 && s.states[n-1] == parseObjectKey {
-		s.err = &SyntaxError{"unexpected end of YAML input", s.bytes}
-		return scanError
-	}
-	// if n > 0 && s.parseState[n-1] == parseArrayValue {
-	// 	s.err = &SyntaxError{"unexpected end of YAML input", s.bytes}
-	// 	return scanError
-	// }
 
-	// return scanEnd
-	// in yaml this is not an error to end in a deep state unless global flow style
 	s.step(s, '\n')
 	if s.endTop || s.err == nil {
 		return scanEnd
 	}
+
 	return scanError
-	// if s.err == nil {
-	// 	s.err = &SyntaxError{"unexpected end of JSON input", s.bytes}
-	// }
-	// return scanError
 }
 
 // pushState pushes a new parse state newState onto the parse stack.
@@ -263,8 +252,8 @@ func indentDiff(s *scanner) int {
 
 // stateBeginLine is the state after reading `\n` or at the beginning.
 func stateBeginLine(s *scanner, c byte) int {
-	// if c == '-' {
-	// 	s.step = stateDash
+	// if c == '-' && s.idn == 0 {
+	// 	s.step = stateDash2
 	// 	return scanContinue
 	// }
 	if isLineBreak(c) {
@@ -306,9 +295,12 @@ func stateBeginLine(s *scanner, c byte) int {
 				return stateBeginLine(s, c)
 			// return s.error(c, "unexpected decrement of indent")
 			case idiff == 0:
-				//either array or error, can safely push array state
-				s.pushState(c, parseArrayValue, scanBeginArray)
-				return stateBeginArrayValue(s, c)
+				//either array or object value was empty and this is the beginning of another key
+				if c == '-' {
+					s.pushState(c, parseArrayValue, scanBeginArray)
+					return stateBeginArrayValue(s, c)
+				}
+				s.states[n-1] = parseObjectKey
 			}
 		case parseArrayValue:
 			// compare with |2| here, because we haven't parsed "- " on the current line yet. But if there is no "- " at all then
@@ -444,7 +436,7 @@ func stateEndValue(s *scanner, c byte) int {
 	switch ps {
 	case parseObjectKey:
 		//if key is unquoted string, then check space in ": ", otherwise check ":"
-		if isWhiteSpace(c) || c == ':' {
+		if s.lastc == ':' && isWhiteSpace(c) || c == ':' {
 			s.states[n-1] = parseObjectValue
 			s.step = stateBeginValueOrEmpty
 			return scanObjectKey
@@ -497,12 +489,22 @@ func stateEndValue(s *scanner, c byte) int {
 
 // stateEndTop is the state after finishing the top-level value,
 // such as after reading `{}` or `[1,2,3]`.
-// Only space characters should be seen now.
+// Only space characters should be seen now (or the end of document)
 func stateEndTop(s *scanner, c byte) int {
-	if !isWhiteSpace(c) {
-		// Complain about non-space byte on next call.
-		s.error(c, "after top-level value")
+	if isSpace(c) {
+		s.idn++
+		return scanEnd
 	}
+	if isLineBreak(c) {
+		s.idn = 0
+		return scanEnd
+	}
+	//check for document separator
+	if c == '-' && s.idn == 0 {
+		s.step = stateEndDoc1
+		return scanContinue
+	}
+	s.error(c, "after top-level value")
 	return scanEnd
 }
 
@@ -523,7 +525,8 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 	case '{', '}', '[', ']', ',':
 		return stateEndValue(s, c)
 	}
-	if isLineBreak(c) {
+	//TODO: optimize? the idea was to skip stateEndValue but probably it was wrong
+	if s.lastc == ':' && isLineBreak(c) {
 		s.pushState(c, parseObjectValue, scanObjectValue)
 		return stateEndLine(s, c)
 	}
@@ -680,28 +683,34 @@ func stateInStringEscU123(s *scanner, c byte) int {
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
-// stateDash is the state after '-' on a new line
-func stateDash(s *scanner, c byte) int {
+// stateEndDoc1 is the state after '-' on a new line when document separator "---\n" is expected
+func stateEndDoc1(s *scanner, c byte) int {
 	if c == '-' {
-		s.step = stateDash2
+		s.step = stateEndDoc2
 		return scanContinue
 	}
-	return stateBeginArrayValueS(s, c)
+	// return stateBeginArrayValueS(s, c)
+	return s.error(c, "in document separator")
 }
 
-// stateDash2 is the state after "--" on a new line
-func stateDash2(s *scanner, c byte) int {
+// stateEndDoc2 is the state after "--" on a new line
+func stateEndDoc2(s *scanner, c byte) int {
 	if c == '-' {
-		s.step = stateNewDocument
+		s.step = stateEndDoc3
 		return scanContinue
 	}
 	return s.error(c, "in document separator")
 }
 
-// stateNewDocument is the state after "---" on a new line
-func stateNewDocument(s *scanner, c byte) int {
+// stateEndDoc3 is the state after "---" on a new line
+func stateEndDoc3(s *scanner, c byte) int {
 	if isLineBreak(c) {
+		//force check of the last document for correctness
 		s.step = stateBeginLine
+		if s.eof() == scanError {
+			return scanError
+		}
+		s.reset()
 		return scanContinue
 	}
 	return s.error(c, "in document separator")
@@ -724,6 +733,10 @@ func stateBeginArrayValueS(s *scanner, c byte) int {
 		//force indent storage to dodge "- a:\n" case. Original idea to store indent on linebreak does not work here. May
 		//be should optimize this
 		s.indents[len(s.indents)-1] = s.idn
+		return scanContinue
+	}
+	if c == '-' && s.idn == 0 {
+		s.step = stateEndDoc2
 		return scanContinue
 	}
 	return s.error(c, "in array value prefix")
@@ -762,6 +775,11 @@ func stateNeg(s *scanner, c byte) int {
 			s.step = stateBeginValueOrEmpty
 		}
 		//TODO: check other conditions xD
+		return scanContinue
+	}
+	//document separator "\n---\n"check
+	if c == '-' && s.idn == 0 {
+		s.step = stateEndDoc2
 		return scanContinue
 	}
 	return s.error(c, "in numeric literal")

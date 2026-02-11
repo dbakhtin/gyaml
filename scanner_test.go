@@ -11,8 +11,8 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			// {"a:\n {foo: bar}", true},
-			{"- {foo: bar}", true},
+			// {"v: \nu:", true},
+			{"v:\n a:\n  b:\n  - 1\nu: 2", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -132,8 +132,10 @@ func TestValidMap(t *testing.T) {
 			ok   bool
 		}{
 			{"v:\ns", false},
+			{"v:", true},
 			{"v : \n s", true},
 			{"v: 1\nu: 2", true},
+			{"v: \nu:", true},
 			{"v: 1.1\nu: 2.2e-5", true},
 			{"v: a\nu: b", true},
 			{"v: \"a\"\nu: \"b\"", true},
@@ -328,7 +330,13 @@ func TestValidDocumentSeparator(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			{`1\n---\n2`, true},
+			{"1\n---\n2", true},
+			{"1\n ---\n2", false},
+			{"1\n--- \n2", false},
+			{"1\n \n---\n2", true},
+			{"- 1\n---\n- 2", true},
+			{"v:\n- 1\n---\n- 2", true},
+			{"v:\n - 1\n---\n- 2", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
