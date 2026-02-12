@@ -13,21 +13,13 @@
 * Faster encoding upto 10-14 times than go-yaml ymmv, see example
 * Less gc pressure & memory consumption upto 10-14 times ymmv, same example
 
-# TIP OF THE DAY
-* Use 'gc' to un/comment region
-
 # Lint & vet
 * Hotkey for GoLint current file
 
 # Scaner
 * Test some real examples
-* Test some go-yaml examples
 
 # TODO
-* Go TDD way: write red test -> fix source, enhance test -> fix source and so on.
-* Decoder scanner
-** Add state for unquoted string: it throws error on space met and is an alternative branch when scanning bools or unquoted chars
-* Clear api surface (see: options, etc) and compare to encoding/json api surface
 * Fix package documentation
 * Polish cmd/main.go memory & performance test for readability
 
@@ -35,7 +27,8 @@
 * folded style multiline?
 
 # Decoder
+* Start xD
 * single-quoted strings dont treat escape chars \t \n etc unlike double-quoted
+* decode_test.go from go-yaml 
 * fuzz_test.go
 * yaml_test.go
-* go-yaml's decode_test.go

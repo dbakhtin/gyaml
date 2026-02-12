@@ -246,7 +246,6 @@ func (s *scanner) popState() {
 	}
 }
 
-// TODO: join with popState?
 // toggleObjectState switches between parseObjectValue and parseObjectKey states
 func (s *scanner) toggleObjectState() {
 	n := len(s.states)
