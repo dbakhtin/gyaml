@@ -20,15 +20,8 @@
 * Hotkey for GoLint current file
 
 # Scaner
-* TODO tomorrow try this:
-** This will be a part of big code optimization
-** BeginLine only cares abount counting indents and then calls BeginValue
-*** BeginArray checks if it is already inside array & indents equal then dont push otherwise if it increases then push, decreases pop & call transition check
-**** Transition check verifies if in object and switches value to key - what is currently done in BeginLine. Can also try to merge it with some checks in EndValue
-
-* TODO: test a short real example
-* TODO: create separate state values for flow style this will make code more clean?
-* in stateEndValue when state = ObjectValue implement the ',' logic for a \n
+* Test some real examples
+* Test some go-yaml examples
 
 # TODO
 * Go TDD way: write red test -> fix source, enhance test -> fix source and so on.
@@ -42,5 +35,7 @@
 * folded style multiline?
 
 # Decoder
+* single-quoted strings dont treat escape chars \t \n etc unlike double-quoted
 * fuzz_test.go
 * yaml_test.go
+* go-yaml's decode_test.go

@@ -11,9 +11,7 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			// {"v: \nu:", true},
-			{"- a: b\n- 1", true},
-			{"v:\n u:\n  - 1\n - 2", false},
+			{"|\n a\n b\nc", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -34,21 +32,38 @@ func TestValidNumbers(t *testing.T) {
 			{"1.2", true},
 			{"1.2.3", false},
 			{"-1.2", true},
+			{"+1.2", true},
 			{"-1.2e2", true},
 			{"1.2e+2", true},
 			{"1.2e-2", true},
 			{"0.2", true},
-			{".2", false},
+			{".2", true},
 			{"0b01", true},
+			{"0b01_01", true},
 			{"0B01", false},
 			{"-0b01", true},
 			{"0b02", false},
 			{"10b01", false},
 			{"0o17", true},
+			{"0o17_24", true},
 			{"0o18", false},
 			{"0x2f", true},
+			{"0x2f_3a", true},
 			{"0x2F", true},
 			{"0x5G", covid},
+			{".inf", true},
+			{"-.inf", true},
+			{"+.inf", true},
+			{".Inf", true},
+			{".INF", true},
+			{".inF", false},
+			{"-.inF", false},
+			{"+.inF", false},
+			{".iNf", false},
+			{".nan", true},
+			{".Nan", true},
+			{".NAN", true},
+			{".nAN", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -65,15 +80,19 @@ func TestValidUnquoted(t *testing.T) {
 			ok   bool
 		}{
 			{"v", true},
-			{"-v", false},
+			{"-v", true},
 			{"v u", true},
 			{" v u", true},
 			{"&a", true},
 			{"*a", true},
+			{"+a", true},
 			{"<<:", true},
 			{"<< :", true},
 			{"<<", false},
 			{"<<a", false},
+			{"!a", false},
+			{"!!a", true},
+			{"!!float 2.3", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -97,6 +116,9 @@ func TestValidUnquoted(t *testing.T) {
 			{"|\n a\n\n b", true},
 			{"|\n a\n b\n  c", true},
 			{"|\n a\n b\nc", false},
+			{"v: |\na", false},
+			{"v: |\n a", true},
+			{"v: |\n <div class=\"cl\">\n  <p>Hello</p>\n </div>", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -107,7 +129,7 @@ func TestValidUnquoted(t *testing.T) {
 }
 
 func TestValidQuoted(t *testing.T) {
-	t.Run("strings", func(t *testing.T) {
+	t.Run("double-quoted", func(t *testing.T) {
 		tests := []struct {
 			data string
 			ok   bool
@@ -116,6 +138,22 @@ func TestValidQuoted(t *testing.T) {
 			{"\"v", false},
 			{"v\"", true},
 			{"v\"u", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+	t.Run("single-quoted", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"'v'", true},
+			{"'v", false},
+			{"v'", true},
+			{"v'u", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -155,6 +193,7 @@ func TestValidMap(t *testing.T) {
 			{"1.1:\n 2.2", true},
 			{"1.1e-2:\n 2.2e+2", true},
 			{"1.1e-2:\n 2.2e+ 2", false},
+			{"v: !!float 2.3", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -176,6 +215,7 @@ func TestValidMap(t *testing.T) {
 			{"v:\n  u:\n   t:\n    2", true},
 			{"v:\n  u:\n  2", false},
 			{"v:\n  u:\n   t:\n   2", false},
+			{"v:\n u: c\nt: b", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -342,6 +382,26 @@ func TestValidDocumentSeparator(t *testing.T) {
 			{"- 1\n---\n- 2", true},
 			{"v:\n- 1\n---\n- 2", true},
 			{"v:\n - 1\n---\n- 2", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+	t.Run("end document", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"...", true},
+			{"...\n2", true},
+			{"1\n...\n2", true},
+			{"1\n ...\n2", false},
+			{"1\n... \n2", false},
+			{"1\n \n...\n2", true},
+			{"- 1\n...\n- 2\nanything", true},
+			{"- 1\nanything\n...\n- 2", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
