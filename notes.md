@@ -24,10 +24,10 @@
 * Polish cmd/main.go memory & performance test for readability
 
 # Encoder
-* folded style multiline?
 
 # Decoder
 * Start xD
+* folded style multiline?
 * single-quoted strings dont treat escape chars \t \n etc unlike double-quoted
 * decode_test.go from go-yaml 
 * fuzz_test.go
