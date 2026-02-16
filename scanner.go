@@ -43,9 +43,7 @@ func checkValid(data []byte, s *scanner) error {
 		if s.step(s, c) == scanError {
 			return s.err
 		}
-		if !isWhiteSpace(c) {
-			s.lastc = c
-		}
+		s.lastInput(c)
 	}
 	if s.eof() == scanError {
 		return s.err
@@ -194,6 +192,14 @@ func (s *scanner) eof() int {
 	}
 
 	return scanError
+}
+
+// lastInput saves last input char c if not a white-space. Helps to treat some ambibuities when parsing unquoted strings
+// in object keys, etc
+func (s *scanner) lastInput(c byte) {
+	if !isWhiteSpace(c) {
+		s.lastc = c
+	}
 }
 
 // pushState pushes a new parse state newState onto the parse stack.
@@ -825,7 +831,7 @@ func stateHyphen(s *scanner, c byte) int {
 // state1 is the state after reading a non-zero integer during a number,
 // such as after reading `1` or `100` but not `0`.
 func state1(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
+	if '0' <= c && c <= '9' || c == '_' {
 		s.step = state1
 		return scanContinue
 	}
@@ -926,7 +932,7 @@ func stateDotBegin(s *scanner, c byte) int {
 // stateDot0 is the state after reading the integer, decimal point, and subsequent
 // digits of a number, such as after reading `3.14`.
 func stateDot0(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
+	if '0' <= c && c <= '9' || c == '_' {
 		return scanContinue
 	}
 	if c == 'e' || c == 'E' {

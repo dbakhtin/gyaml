@@ -29,6 +29,7 @@
 * Start xD
 * folded style multiline?
 * single-quoted strings dont treat escape chars \t \n etc unlike double-quoted
+** Test special chars in single/double quoted strings
 * decode_test.go from go-yaml 
 * fuzz_test.go
 * yaml_test.go

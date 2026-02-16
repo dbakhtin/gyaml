@@ -11,7 +11,7 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			{"|\n a\n b\nc", false},
+			{"'v'", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -29,7 +29,9 @@ func TestValidNumbers(t *testing.T) {
 			ok   bool
 		}{
 			{"1", true},
+			{"1_2", true},
 			{"1.2", true},
+			{"1.2_3", true},
 			{"1.2.3", false},
 			{"-1.2", true},
 			{"+1.2", true},
