@@ -109,14 +109,14 @@ Input:
 				// this value is correct in the next call of Decode.
 				dec.scan.bytes--
 				break Input
-			case scanEndObject, scanEndArray:
-				// scanEnd is delayed one byte.
-				// We might block trying to get that byte from src,
-				// so instead invent a space byte.
-				if stateEndValue(&dec.scan, '\n') == scanEnd {
-					scanp++
-					break Input
-				}
+			// case scanEndObject, scanEndArray:
+			// 	// scanEnd is delayed one byte.
+			// 	// We might block trying to get that byte from src,
+			// 	// so instead invent a space byte.
+			// 	if stateEndValue(&dec.scan, '\n') == scanEnd {
+			// 		scanp++
+			// 		break Input
+			// 	}
 			case scanError:
 				dec.err = dec.scan.err
 				return 0, dec.scan.err

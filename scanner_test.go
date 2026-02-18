@@ -11,7 +11,9 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			{"'v'", true},
+			{"v: [a: b, c: d]", true},
+			// {"'v", false},
+			// {"\"v", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -32,7 +34,6 @@ func TestValidNumbers(t *testing.T) {
 			{"1_2", true},
 			{"1.2", true},
 			{"1.2_3", true},
-			{"1.2.3", false},
 			{"-1.2", true},
 			{"+1.2", true},
 			{"-1.2e2", true},
@@ -42,10 +43,8 @@ func TestValidNumbers(t *testing.T) {
 			{".2", true},
 			{"0b01", true},
 			{"0b01_01", true},
-			{"0B01", false},
 			{"-0b01", true},
 			{"0b02", false},
-			{"10b01", false},
 			{"0o17", true},
 			{"0o17_24", true},
 			{"0o18", false},
@@ -95,6 +94,8 @@ func TestValidUnquoted(t *testing.T) {
 			{"!a", false},
 			{"!!a", true},
 			{"!!float 2.3", true},
+			{"1.2.3", true},
+			{"0B01", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -128,6 +129,25 @@ func TestValidUnquoted(t *testing.T) {
 			}
 		}
 	})
+	t.Run("time", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"2015-01-01", true},
+			{"2015-02-24T18:19:39.12Z", true},
+			{"2015-2-3T3:4:5Z", true},
+			{"2015-02-24t18:19:39Z", true},
+			{"2015-02-24 18:19:39", true},
+			{"60s", true},
+			{"-0.5h", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
 }
 
 func TestValidQuoted(t *testing.T) {
@@ -140,6 +160,13 @@ func TestValidQuoted(t *testing.T) {
 			{"\"v", false},
 			{"v\"", true},
 			{"v\"u", true},
+			{`'"v"'`, true},
+			{"'v", false},
+			// {`''''`, true},
+			{`' 1\n  2'`, true},
+			{"a\x2Fb", true},
+			{"a\u002F", true},
+			{"a\U0000002F", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -188,7 +215,7 @@ func TestValidMap(t *testing.T) {
 			{"v: 1\nu:2", false},
 			{"v:1\nu: 2", false},
 			{"1: 2\n3: 4", true},
-			{"1 : 2", false},
+			{"1 : 2", true},
 			{"a : b", true},
 			{"a:: b\nc: d", true}, // parsed as "a:": b, c:d
 			{"1:\n2", false},
@@ -196,6 +223,7 @@ func TestValidMap(t *testing.T) {
 			{"1.1e-2:\n 2.2e+2", true},
 			{"1.1e-2:\n 2.2e+ 2", false},
 			{"v: !!float 2.3", true},
+			{"v: 2015-01-01", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -362,6 +390,8 @@ func TestValidFlow(t *testing.T) {
 			{"a:\n {foo: bar}", true},
 			{"- [a, b]\n- [c, d]", true},
 			{"v:\n- [a, b]\n- [c, d]", true},
+			{"v: [a: b, c: d]", true},
+			{"v: [{a: b}, {c: d, e: f}]", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {

@@ -17,6 +17,9 @@
 * Hotkey for GoLint current file
 
 # Scaner
+* Test for "v: [a: b, c: d]". Probably need to split parseArray/parseObject consts for flow & block style
+* Test for '\n' in in single-quoted strings
+* Remove number states? Merge all into unquoted string
 * Test some real examples
 
 # TODO
@@ -26,9 +29,13 @@
 # Encoder
 
 # Decoder
-* Start xD
+* Test & implement decoding into map[any]any
+** Use literalInterface & similar to determine type
+* Test unicode \u in single quotes for proper escaping
+* Test for '\n' in in single-quoted strings
 * folded style multiline?
 * single-quoted strings dont treat escape chars \t \n etc unlike double-quoted
+* remove panics, use error codes?
 ** Test special chars in single/double quoted strings
 * decode_test.go from go-yaml 
 * fuzz_test.go
