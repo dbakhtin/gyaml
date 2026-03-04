@@ -6,7 +6,10 @@
 
 package gyaml
 
-import "strings"
+import (
+	"bytes"
+	"strings"
+)
 
 // maximum length of the reserved word
 var maxReservedLength int
@@ -17,7 +20,6 @@ func init() {
 	allReservedSlice := [][]string{
 		reservedBoolKeywords,
 		reservedInfKeywords,
-		reservedLegacyBoolKeywords,
 		reservedMiscKeywords,
 		reservedNanKeywords,
 		reservedNullKeywords,
@@ -47,29 +49,6 @@ var (
 		"false",
 		"False",
 		"FALSE",
-	}
-
-	// For compatibility with other YAML 1.1 parsers
-	// Note that we use these solely for encoding the bool value with quotes.
-	// go-yaml should not treat these as reserved keywords at parsing time.
-	// as go-yaml is supposed to be compliant only with YAML 1.2.
-	reservedLegacyBoolKeywords = []string{
-		"y",
-		"Y",
-		"yes",
-		"Yes",
-		"YES",
-		"n",
-		"N",
-		"no",
-		"No",
-		"NO",
-		"on",
-		"On",
-		"ON",
-		"off",
-		"Off",
-		"OFF",
 	}
 
 	reservedInfKeywords = []string{
@@ -130,6 +109,25 @@ func isNeedQuoted(value string) bool {
 		}
 	}
 	return isTimestamp(value)
+}
+
+// detectLineBreakCharacter detect line break character in only one inside scalar content scope.
+func detectLineBreakChars(src []byte) []byte {
+	n := []byte{'\n'}
+	r := []byte{'\r'}
+	rn := []byte{'\r', '\n'}
+
+	nc := bytes.Count(src, n)
+	rc := bytes.Count(src, r)
+	rnc := bytes.Count(src, rn)
+	switch {
+	case nc == rnc && rc == rnc:
+		return rn
+	case rc > nc:
+		return r
+	default:
+		return n
+	}
 }
 
 // detectLineBreakCharacter detect line break character in only one inside scalar content scope.

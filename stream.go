@@ -43,6 +43,36 @@ func (dec *Decoder) UseNumber() { dec.d.useNumber = true }
 // non-ignored, exported fields in the destination.
 func (dec *Decoder) DisallowUnknownFields() { dec.d.disallowUnknownFields = true }
 
+var (
+	newDocumentSeparator = []byte{'-', '-', '-'}
+	endDocumentSeparator = []byte{'.', '.', '.'}
+)
+
+// documentStartIndex looks for a [newDocumentSeparator] sequence in a bytes buffer
+// and returns the index of the first byte after this separator
+func documentStartIndex(buf []byte) int {
+	if bytes.HasPrefix(buf, newDocumentSeparator) {
+		return 3
+	}
+	idx := bytes.Index(buf, append([]byte{'\n'}, newDocumentSeparator...))
+	if idx > -1 {
+		return idx + 4
+	}
+	return 0
+}
+
+// documentEndIndex looks for a [endDocumentSeparator] sequence in a bytes buffer
+// returns index of the first byte preceding it
+// separator should either be the first value (then document is empty) or start from a new line
+func documentEndIndex(buf []byte) int {
+	idx := bytes.Index(buf, append([]byte{'\n'}, endDocumentSeparator...))
+	if idx == -1 && bytes.HasPrefix(buf, endDocumentSeparator) {
+		//document empty
+		idx = 0
+	}
+	return idx
+}
+
 // Decode reads the next YAML-encoded value from its
 // input and stores it in the value pointed to by v.
 //
@@ -62,13 +92,39 @@ func (dec *Decoder) Decode(v any) error {
 	}
 
 	// Read whole value into buffer.
+	//TODO: readValue should stop on each "\n---\n" or "\n...\n"?
 	n, err := dec.readValue()
 	if err != nil {
 		return err
 	}
-	dec.d.init(dec.buf[dec.scanp : dec.scanp+n])
+	buf := dec.buf[dec.scanp : dec.scanp+n]
+	//Look for new document separator "---" starting from a new line or buffer beginning
+	//TODO: optimize, may be use bytes.Cut?
+	start := documentStartIndex(buf)
+	if start > 0 {
+		dec.scan.reset()
+		dec.scanp = start
+		n -= start
+		buf = buf[start:]
+		startNext := documentStartIndex(buf)
+		if startNext > 0 {
+			n = max(0, startNext-4)
+			buf = buf[:n]
+		}
+	}
+	//Look for a document end separator
+	end := documentEndIndex(buf)
+	if end > -1 {
+		buf = buf[:end]
+		n = end + 4 //skip "\n..." bytes
+	}
+	// dec.d.init(dec.buf[dec.scanp : dec.scanp+n])
+	dec.d.init(buf)
 	dec.scanp += n
 
+	if len(buf) == 0 {
+		return io.EOF
+	}
 	// Don't save err from unmarshal into dec.err:
 	// the connection is still usable since we read a complete YAML
 	// object from it before the error happened.

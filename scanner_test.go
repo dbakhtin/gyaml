@@ -1,7 +1,6 @@
 package gyaml
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -11,9 +10,13 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			{"v: [a: b, c: d]", true},
-			// {"'v", false},
-			// {"\"v", false},
+			{`
+step:
+  street: |
+      123 Tornado
+  city: East Center
+`, true},
+			//
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -31,9 +34,7 @@ func TestValidNumbers(t *testing.T) {
 			ok   bool
 		}{
 			{"1", true},
-			{"1_2", true},
 			{"1.2", true},
-			{"1.2_3", true},
 			{"-1.2", true},
 			{"+1.2", true},
 			{"-1.2e2", true},
@@ -42,14 +43,14 @@ func TestValidNumbers(t *testing.T) {
 			{"0.2", true},
 			{".2", true},
 			{"0b01", true},
-			{"0b01_01", true},
+			{"0b01_01", false},
 			{"-0b01", true},
 			{"0b02", false},
 			{"0o17", true},
-			{"0o17_24", true},
+			{"0o17_24", false},
 			{"0o18", false},
 			{"0x2f", true},
-			{"0x2f_3a", true},
+			{"0x2f_3a", false},
 			{"0x2F", true},
 			{"0x5G", covid},
 			{".inf", true},
@@ -87,8 +88,9 @@ func TestValidUnquoted(t *testing.T) {
 			{"&a", true},
 			{"*a", true},
 			{"+a", true},
-			{"<<:", true},
-			{"<< :", true},
+			{"<foo>", true},
+			{"<<:", false}, //merge not supported
+			{"<< :", false},
 			{"<<", false},
 			{"<<a", false},
 			{"!a", false},
@@ -96,6 +98,7 @@ func TestValidUnquoted(t *testing.T) {
 			{"!!float 2.3", true},
 			{"1.2.3", true},
 			{"0B01", true},
+			{"50cent_of_dollar", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -122,6 +125,7 @@ func TestValidUnquoted(t *testing.T) {
 			{"v: |\na", false},
 			{"v: |\n a", true},
 			{"v: |\n <div class=\"cl\">\n  <p>Hello</p>\n </div>", true},
+			{"v:\n- A\n- |-\n  B\n  C\n", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -160,13 +164,19 @@ func TestValidQuoted(t *testing.T) {
 			{"\"v", false},
 			{"v\"", true},
 			{"v\"u", true},
-			{`'"v"'`, true},
-			{"'v", false},
-			// {`''''`, true},
-			{`' 1\n  2'`, true},
-			{"a\x2Fb", true},
-			{"a\u002F", true},
-			{"a\U0000002F", true},
+			{"\"a\x2Fb\"", true},
+			{"\"a\u002F\"", true},
+			{"\"a\U0000002F\"", true},
+			{`"\" \a \b \e \f"`, true},
+			{`"\n \r \t \v \0"`, true},
+			{`"\  \_ \N \L \P"`, true},
+			{"\"A \\\n \x41 \u0041 \U00000041\"", true},
+			{`"\  \_ \N \L \P \
+\x41 \u0041 \U00000041"`, true},
+			{"\"a\\\r\nb\\\r\nc\"", true},
+			{"\"a\\\nb\\\nc\"", true},
+			{"\"a\\\rb\\\rc\"", true},
+			{"\"   1\n    2\n    3\"", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -183,6 +193,11 @@ func TestValidQuoted(t *testing.T) {
 			{"'v", false},
 			{"v'", true},
 			{"v'u", true},
+			{`'"v"'`, true},
+			{`''''`, true},
+			{`'''2'''`, true},
+			{`'B''z'`, true},
+			{"'   1\n    2\n    3'", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -211,6 +226,7 @@ func TestValidMap(t *testing.T) {
 			{"v: \"u", false},
 			{"v: 1\n u: 2", false},
 			{"v: a: b", false},
+			{"v: a, b", true},
 			{"v: 1: b", false},
 			{"v: 1\nu:2", false},
 			{"v:1\nu: 2", false},
@@ -224,6 +240,8 @@ func TestValidMap(t *testing.T) {
 			{"1.1e-2:\n 2.2e+ 2", false},
 			{"v: !!float 2.3", true},
 			{"v: 2015-01-01", true},
+			{"a: b\rc: d", true},
+			{"v: /a/{b}", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -265,6 +283,7 @@ func TestValidMap(t *testing.T) {
 			{"v:\n- a: b\n- c: d", true},
 			{"v:\n u:\n  - 1\n - 2", false},
 			{"v:\n- a:\n  - b\n- c: d", true},
+			{"tags:\n- hello-world\na: foo", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -329,6 +348,8 @@ func TestValidSlice(t *testing.T) {
 			{"- - a: b\n  - c: d\n- - e: f", true},
 			{"- a: b\n  c: d", true},
 			{"- - a: b\n    c: d", true},
+			{"- a:\n    b:\n- c: d", true}, //b is null here
+			{"- a: [2 , 2]      ", true},   //with tabs in the end
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -375,6 +396,7 @@ func TestValidFlow(t *testing.T) {
 			{`{fo: ba, re:{mo: [qu, no]}}`, true},
 			{`{fo:ba, re:{mo:[qu]}}`, false},
 			{`{"foo": "bar","bar": {"baz": ["qux"]}}`, true},
+			{"{a: , b: c}", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -409,7 +431,7 @@ func TestValidDocumentSeparator(t *testing.T) {
 		}{
 			{"1\n---\n2", true},
 			{"1\n ---\n2", false},
-			{"1\n--- \n2", false},
+			{"1\n--- \n2", true},
 			{"1\n \n---\n2", true},
 			{"- 1\n---\n- 2", true},
 			{"v:\n- 1\n---\n- 2", true},
@@ -430,7 +452,7 @@ func TestValidDocumentSeparator(t *testing.T) {
 			{"...\n2", true},
 			{"1\n...\n2", true},
 			{"1\n ...\n2", false},
-			{"1\n... \n2", false},
+			{"1\n... \n2", true},
 			{"1\n \n...\n2", true},
 			{"- 1\n...\n- 2\nanything", true},
 			{"- 1\nanything\n...\n- 2", false},
@@ -443,18 +465,62 @@ func TestValidDocumentSeparator(t *testing.T) {
 	})
 }
 
-func TestValidJson(t *testing.T) {
-	tests := []struct {
-		data string
-		ok   bool
-	}{
-		{"1", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.data, func(t *testing.T) {
-			if ok := json.Valid([]byte(tt.data)); ok != tt.ok {
+func TestValidAnchor(t *testing.T) {
+	t.Run("scalars", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"a: &x 1\nc: *x", true},
+			{"a: & 1\nc: *x", false},
+			{"a: &x 1\nc: *", false},
+			{"a: &- 1\nc: *-", true},
+			{"a: &: 1\nc: *x", false},
+			{"a: &x 1\nc: *:", false},
+			{"a: &a {c: 1}\nb: *a\n", true},
+			{"{a: &a c, *a : b}", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
 				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
 			}
-		})
-	}
+		}
+	})
+}
+
+func TestValidComment(t *testing.T) {
+	t.Run("scalars", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"# comment", true},
+			{"#comment", true},
+			{"#", true},
+			{"--- #comment", true},
+			{"... #comment", true},
+			{"| #comment\n abc", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+	t.Run("maps", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"v: 1\n# comment\nu: 2", true},
+			{"v:\n  a: 1\n# comment\nu: 2", true},
+			{"v:\n  a: 1\n # comment\nu: 2", true},
+			{"'v': '1' # comment", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
 }

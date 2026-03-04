@@ -1335,7 +1335,7 @@ func typeFields(t reflect.Type) structFields {
 				if name != "" || !sf.Anonymous || ft.Kind() != reflect.Struct || isAnonymousStructRef {
 					tagged := name != ""
 					if name == "" {
-						//default lowercase struct, go-yaml compatibility
+						//default lowercase struct fields, go-yaml compatibility
 						//name = sf.Name
 						name = strings.ToLower(sf.Name)
 					}
@@ -1419,6 +1419,7 @@ func typeFields(t reflect.Type) structFields {
 						fields = append(fields, fields[len(fields)-1])
 					}
 					//dont skip anonymous struct exploration (below)
+					// continue
 					if !isAnonymousStructRef {
 						continue
 					}
