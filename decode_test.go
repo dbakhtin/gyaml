@@ -22,16 +22,11 @@ func TestCustomTable(t *testing.T) {
 		value  any
 	}{
 		{
-			source: `'1': ''''`,
-			value:  map[string]any{"1": `'`},
-		},
-		{
-			source: `'1': '''2'''`,
-			value:  map[string]any{"1": `'2'`},
-		},
-		{
-			source: `'1': 'B''z'`,
-			value:  map[string]any{"1": `B'z`},
+			source: "a: &a b # comment\nb: *a # comment2\n",
+			value: map[any]any{
+				"a": "b",
+				"b": "b",
+			},
 		},
 		//
 	}
@@ -55,70 +50,35 @@ func TestCustomTable(t *testing.T) {
 
 // test for debugging
 func TestCustom(t *testing.T) {
-	t.Run("anchors/aliases", func(t *testing.T) {
-		source := `
----
-receipt:     Oz-Ware Purchase Invoice
-date:        2012-08-06
-customer:
-    first_name:   Dorothy
-    family_name:  Gale
-
-items:
-    - part_no:   A4786
-      descrip:   Water Bucket (Filled)
-      price:     1.47
-      quantity:  4
-
-    - part_no:   E1628
-      descrip:   High Heeled "Ruby" Slippers
-      size:      8
-      price:     133.7
-      quantity:  1
-
-bill-to:  &id001
-    street: |
-            123 Tornado Alley
-            Suite 16
-    city:   East Centerville
-    state:  KS
-
-ship-to:  *id001
-
-specialDelivery:  >
-    Follow the Yellow Brick
-    Road to the Emerald City.
-    Pay no attention to the
-    man behind the curtain.
-...
-  `
-		var v map[any]any
-		if err := NewDecoder(strings.NewReader(source)).Decode(&v); err != nil {
-			t.Fatal(err)
-		}
-		if len(v) != 7 {
-			t.Fatalf("expected slice length 7, got %d", len(v))
-		}
-		shipto, ok := v["ship-to"]
-		if !ok {
-			t.Fatalf("ship-to not found")
-		}
-		m, ok := shipto.(map[string]any)
-		if !ok {
-			t.Fatalf("expected ship-to type map[string]any, got: %T", shipto)
-		}
-		if m["state"] != "KS" {
-			t.Errorf("ship-to: [%q]\n", m["street"])
-			t.Fatalf("expected ship-to.state [%v], got [%v]", "KS", m["state"])
-		}
-		sd, ok := v["specialDelivery"].(string)
-		if !ok {
-			t.Fatalf("expected specialDelivery to be string, got %T", m["specialDelivery"])
-		}
-		if !strings.Contains(sd, "Brick Road") {
-			t.Fatalf("expected specialDelivery to contain %q, got %v", "Brick Road", m["specialDelivery"])
-		}
-	})
+	tests := []struct {
+		source string
+		value  any
+	}{
+		{
+			source: "a: &a 1 # comment\n*a: 2 # comment2\n",
+			value: map[any]any{
+				"a": "1",
+				"1": "2",
+			},
+		},
+		//
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			buf := bytes.NewBufferString(test.source)
+			dec := NewDecoder(buf)
+			typ := reflect.TypeFor[any]()
+			value := reflect.New(typ)
+			if err := dec.Decode(value.Interface()); err != nil {
+				t.Fatalf("%s: %+v", test.source, err)
+			}
+			actual := fmt.Sprintf("%+v", value.Elem().Interface())
+			expect := fmt.Sprintf("%+v", test.value)
+			if actual != expect {
+				t.Fatalf("failed to test [%s], actual=[%s], expect=[%s]", test.source, actual, expect)
+			}
+		})
+	}
 }
 
 func TestUnmarshalScalar(t *testing.T) {
@@ -532,6 +492,23 @@ func TestDecoder(t *testing.T) {
 		{
 			source: `'1': '\\'`,
 			value:  map[string]any{"1": `\\`},
+		},
+		{
+			source: `'1': '\u0101'`,
+			value:  map[string]any{"1": "\\u0101"},
+		},
+		{
+			source: `
+      - 'Fun with \'
+      - '\" \a \b \e \f'
+      - '\n \r \t \v \0'
+      - '\  \_ \N \L \P'
+    `,
+			value: []string{`Fun with \`, `\" \a \b \e \f`, `\n \r \t \v \0`, `\  \_ \N \L \P`},
+		},
+		{
+			source: `'1': '\n'`,
+			value:  map[string]any{"1": "\\n"},
 		},
 		{
 			source: `'1': '\"2\"'`,
@@ -1051,6 +1028,10 @@ func TestDecoder(t *testing.T) {
 			source: ">-\n  a\n  b\n\n",
 			value:  "a b",
 		},
+		{
+			source: "- |\n  hello\n \n  \n- world",
+			value:  []string{"hello\n", "world"},
+		},
 		//document separators
 		{
 			source: "---\na: b\n",
@@ -1378,6 +1359,16 @@ func TestDecoder(t *testing.T) {
 			source: "42: 100",
 			value:  map[int]any{42: 100},
 		},
+		//multi dimensional arrays
+		{
+			source: "- [a, b]\n- [c]",
+			value:  [][]string{{"a", "b"}, {"c"}},
+		},
+		//does not work atm, left for later
+		// {
+		// 	source: "- - a\n  - b\n- - c",
+		// 	value:  [][]string{{"a", "b"}, {"c"}},
+		// },
 	}
 	for _, test := range tests {
 		t.Run(test.source, func(t *testing.T) {
@@ -2317,6 +2308,57 @@ d: *a
 	}
 	if !reflect.DeepEqual(v, T{A: 1, B: 2, C: 3, D: 3}) {
 		t.Fatalf("failed to decode same anchor: %+v", v)
+	}
+}
+
+func TestDecoderAnchorInterface(t *testing.T) {
+	tests := []struct {
+		source string
+		value  any
+	}{
+		{
+			source: "a: &a b # comment\nb: *a # comment2\n",
+			value: map[any]any{
+				"a": "b",
+				"b": "b",
+			},
+		},
+		//though anchor is int it is converted to string by objectInterface() logic atm, see comments to function
+		{
+			source: "a: &a 1\n*a: 2\n",
+			value: map[any]any{
+				"a": "1",
+				"1": "2",
+			},
+		},
+		{
+			source: "- &a a #comment\n- *a # comment2\n",
+			value:  []any{"a", "a"},
+		},
+		{
+			source: "- c\n- &a 1 #comment\n- *a # comment2\n",
+			value:  []any{"c", 1, 1},
+		},
+		//
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			buf := bytes.NewBufferString(test.source)
+			dec := NewDecoder(buf)
+			//by decoding into value of type [any] we force the use of object/value/literalInterface functions which have simplified
+			//logic compared to ordinary object()/value()/storeLiteral funcs
+			typ := reflect.TypeFor[any]()
+			value := reflect.New(typ)
+			if err := dec.Decode(value.Interface()); err != nil {
+				t.Fatalf("%s: %+v", test.source, err)
+			}
+			//comparing string representation makes "1" == 1, but manual go-cmp/cmp.Diff tells all types are correct
+			actual := fmt.Sprintf("%+v", value.Elem().Interface())
+			expect := fmt.Sprintf("%+v", test.value)
+			if actual != expect {
+				t.Fatalf("failed to test [%s], actual=[%s], expect=[%s]", test.source, actual, expect)
+			}
+		})
 	}
 }
 

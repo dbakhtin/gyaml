@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package yaml implements encoding and decoding of YAML as defined in RFC 7159.
+// Package gyaml implements encoding and decoding of YAML as defined in RFC 7159.
 // The mapping between YAML and Go values is described in the documentation for
 // the Marshal and Unmarshal functions.
 //
@@ -256,13 +256,13 @@ func (e *UnsupportedValueError) Error() string {
 // replacing invalid bytes with the Unicode replacement rune U+FFFD.
 //
 // Deprecated: No longer used; kept for compatibility.
-type InvalidUTF8Error struct {
-	S string // the whole string value that caused the error
-}
-
-func (e *InvalidUTF8Error) Error() string {
-	return "yaml: invalid UTF-8 in string: " + strconv.Quote(e.S)
-}
+// type InvalidUTF8Error struct {
+// 	S string // the whole string value that caused the error
+// }
+//
+// func (e *InvalidUTF8Error) Error() string {
+// 	return "yaml: invalid UTF-8 in string: " + strconv.Quote(e.S)
+// }
 
 // A MarshalerError represents an error from calling a
 // [Marshaler.MarshalYAML] or [encoding.TextMarshaler.MarshalText] method.
@@ -863,13 +863,13 @@ func newMapEncoder(t reflect.Type) encoderFunc {
 }
 
 // mergeAlias merges an alias if found in anchor's map
-func mergeAlias(e *encodeState, ptr uintptr) bool {
-	anchor, ok := getAnchor(e, ptr)
-	if ok {
-		e.WriteString("<<: *" + anchor)
-	}
-	return ok
-}
+// func mergeAlias(e *encodeState, ptr uintptr) bool {
+// 	anchor, ok := getAnchor(e, ptr)
+// 	if ok {
+// 		e.WriteString("<<: *" + anchor)
+// 	}
+// 	return ok
+// }
 
 // encodeAlias encodes alias if found in anchor's map, returns true is successful
 func encodeAlias(e *encodeState, ptr uintptr, alias string) bool {
@@ -966,21 +966,23 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 
 		// if its a reference to embedded struct & no anchors found, ignore the ref
 		// this is an artificial field with only purpose to track anchors
-		if f.isAnonymousRef {
-			if _, ok := getAnchor(e, fv.Pointer()); !ok {
-				continue
-			}
-		}
+		//03.04.26
+		// if f.isAnonymousRef {
+		// 	if _, ok := getAnchor(e, fv.Pointer()); !ok {
+		// 		continue
+		// 	}
+		// }
 
 		//se.fields.list is a plain slice of all struct fields mixed with embedded ones.
 		//f.anonymousParentTyp != nil if a parent struct has an embedded pointer struct
 		//if anchorsFound[f.anonymousParentTyp] found it means an alias has already been printed
 		//and I should skip these nested fields
-		if f.anonymousParentTyp != nil {
-			if _, ok := anchorsFound[f.anonymousParentTyp]; ok {
-				continue
-			}
-		}
+		//03.04.26
+		// if f.anonymousParentTyp != nil {
+		// 	if _, ok := anchorsFound[f.anonymousParentTyp]; ok {
+		// 		continue
+		// 	}
+		// }
 
 		b := append(e.AvailableBuffer(), next...)
 		if e.opts.FlowStyle {
@@ -997,11 +999,12 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 		}
 		empty = false
 		//anonymous self embed with pointer, like struct Person{*Person...}, f->*Person field
-		if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
-			if found := mergeAlias(e, fv.Pointer()); found {
-				continue
-			}
-		}
+		//03.04.26
+		// if f.isAnonymousRef && fv.Elem().Type() == v.Type() {
+		// 	if found := mergeAlias(e, fv.Pointer()); found {
+		// 		continue
+		// 	}
+		// }
 
 		if e.opts.JSONStyle {
 			//quote struct fields
@@ -1056,7 +1059,15 @@ func (ae arrayEncoder) encodeFlow(e *encodeState, v reflect.Value, ns nestedStat
 		if i > 0 {
 			e.Write([]byte{',', ' '})
 		}
-		ae.elemEnc(e, v.Index(i), inSlice)
+		el := v.Index(i)
+		kind := el.Kind()
+		if kind == reflect.Pointer || kind == reflect.Map || kind == reflect.Slice {
+			if anchor, found := e.anchors[el.Pointer()]; found {
+				e.WriteString("*" + anchor)
+				continue
+			}
+		}
+		ae.elemEnc(e, el, inSlice)
 	}
 	e.WriteByte(']')
 }
@@ -1098,7 +1109,15 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 			//if slice of slices and this is the second slice, just print "- "
 			e.Write(indent(1, e.opts.IndentSize, true))
 		}
-		ae.elemEnc(e, v.Index(i), nsChild)
+		el := v.Index(i)
+		kind := el.Kind()
+		if kind == reflect.Pointer || kind == reflect.Map || kind == reflect.Slice {
+			if anchor, found := e.anchors[el.Pointer()]; found {
+				e.WriteString("*" + anchor)
+				continue
+			}
+		}
+		ae.elemEnc(e, el, nsChild)
 		ns = ns &^ indentPrinted //reset the indentPrinted bit, coming from parent ns
 	}
 }
@@ -1227,7 +1246,6 @@ type field struct {
 	omitEmpty bool
 	omitZero  bool
 	isZero    func(reflect.Value) bool
-	quoted    bool
 	inline    bool
 	flow      bool
 
@@ -1236,12 +1254,12 @@ type field struct {
 	alias  string
 	//if a field is a pointer to self struct (embedded or not)
 	//if true, structEncoder should check pointer value for containment in encoder's anchorRefToName map
-	isAnonymousRef bool
+	// isAnonymousRef bool
 	//a field inside embedded struct pointer.
 	//this field should not be encoded to yaml if and only if an anchor for the parent embedded struct exists in cache
-	isAnonymousRefField bool
+	// isAnonymousRefField bool
 	//anonymousParentTyp contains parent struct type if isAnonymousRefField is true
-	anonymousParentTyp reflect.Type
+	// anonymousParentTyp reflect.Type
 
 	encoder encoderFunc
 }
@@ -1319,20 +1337,21 @@ func typeFields(t reflect.Type) structFields {
 				copy(index, f.index)
 				index[len(f.index)] = i
 
-				isAnonymousStructRef := false
+				// isAnonymousStructRef := false
 				ft := sf.Type
 				if ft.Name() == "" && ft.Kind() == reflect.Pointer {
 					// Follow pointer.
 					ft = ft.Elem()
 
 					//embedded reference, potentially anchorable, ex: type Person struct {*Person ...}
-					if sf.Anonymous && ft.Kind() == reflect.Struct {
-						isAnonymousStructRef = true
-					}
+					// if sf.Anonymous && ft.Kind() == reflect.Struct {
+					// 	isAnonymousStructRef = true
+					// }
 				}
 
 				// Record found field and index sequence.
-				if name != "" || !sf.Anonymous || ft.Kind() != reflect.Struct || isAnonymousStructRef {
+				// if name != "" || !sf.Anonymous || ft.Kind() != reflect.Struct || isAnonymousStructRef {
+				if name != "" || !sf.Anonymous || ft.Kind() != reflect.Struct {
 					tagged := name != ""
 					if name == "" {
 						//default lowercase struct fields, go-yaml compatibility
@@ -1355,26 +1374,26 @@ func typeFields(t reflect.Type) structFields {
 					}
 
 					field := field{
-						name:                name,
-						tag:                 tagged,
-						index:               index,
-						typ:                 ft,
-						omitEmpty:           opts.Contains("omitempty"),
-						omitZero:            opts.Contains("omitzero"),
-						inline:              opts.Contains("inline"),
-						flow:                opts.Contains("flow"),
-						anchor:              anchor,
-						alias:               alias,
-						isAnonymousRef:      isAnonymousStructRef,
-						isAnonymousRefField: f.isAnonymousRefField,
+						name:      name,
+						tag:       tagged,
+						index:     index,
+						typ:       ft,
+						omitEmpty: opts.Contains("omitempty"),
+						omitZero:  opts.Contains("omitzero"),
+						inline:    opts.Contains("inline"),
+						flow:      opts.Contains("flow"),
+						anchor:    anchor,
+						alias:     alias,
+						// isAnonymousRef:      isAnonymousStructRef,
+						// isAnonymousRefField: f.isAnonymousRefField,
 						//quoted:    quoted,
 					}
 					field.nameBytes = []byte(field.name)
 					// field.namePrint = field.name + `: `
 
-					if field.isAnonymousRefField {
-						field.anonymousParentTyp = f.typ
-					}
+					// if field.isAnonymousRefField {
+					// 	field.anonymousParentTyp = f.typ
+					// }
 
 					if field.omitZero {
 						t := sf.Type
@@ -1418,17 +1437,18 @@ func typeFields(t reflect.Type) structFields {
 						// so don't bother generating any more copies.
 						fields = append(fields, fields[len(fields)-1])
 					}
+					continue
 					//dont skip anonymous struct exploration (below)
-					// continue
-					if !isAnonymousStructRef {
-						continue
-					}
+					// if !isAnonymousStructRef {
+					// 	continue
+					// }
 				}
 
 				// Record new anonymous struct to explore in next round.
 				nextCount[ft]++
 				if nextCount[ft] == 1 {
-					next = append(next, field{name: ft.Name(), index: index, typ: ft, isAnonymousRefField: isAnonymousStructRef})
+					// next = append(next, field{name: ft.Name(), index: index, typ: ft, isAnonymousRefField: isAnonymousStructRef})
+					next = append(next, field{name: ft.Name(), index: index, typ: ft})
 				}
 			}
 		}

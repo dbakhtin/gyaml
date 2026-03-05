@@ -904,7 +904,7 @@ func stateInAlias(s *scanner, c byte) int {
 		s.step = stateBeginValueOrEmpty
 		return scanSkipSpace
 	}
-	if isLineBreak(c) || s.isUnqDelim(c) {
+	if isLineBreak(c) || c == ':' || s.isUnqDelim(c) {
 		return stateEndValue(s, c)
 	}
 

@@ -33,37 +33,41 @@ type TestTextUnmarshalerContainer struct {
 	V TestTextMarshaler
 }
 
+// test for debugging
 func TestEncode(t *testing.T) {
-	tests := []struct {
-		source  string
-		value   any
-		options func(*Encoder) *Encoder
-	}{
-		{
-			"a: \"\"\nb: {}\n",
-			struct {
-				A netip.Addr         `yaml:"a"`
-				B struct{ X, y int } `yaml:"b"`
-			}{},
-			func(e *Encoder) *Encoder { return e.WithOmitEmpty(true) },
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.source, func(t *testing.T) {
-			var buf bytes.Buffer
-			enc := NewEncoder(&buf)
-			if test.options != nil {
-				enc = test.options(enc)
-			}
-			if err := enc.Encode(test.value); err != nil {
-				t.Fatalf("%+v", err)
-			}
-			if test.source != buf.String() {
-				t.Fatalf("expect = [%s], actual = [%s]", test.source, buf.String())
-			}
-		})
-	}
+	t.Run("anchors with flow", func(t *testing.T) {
+		type Person struct {
+			*Person `yaml:",omitempty"`
+			Name    string `yaml:",omitempty"`
+			Age     int    `yaml:",omitempty"`
+		}
+		defaultPerson := &Person{Name: "John Smith", Age: 20}
+		people := []*Person{
+			{
+				Person: defaultPerson,
+				Name:   "Ken",
+				Age:    10,
+			},
+			defaultPerson,
+		}
+		var doc struct {
+			Default *Person   `yaml:"default,anchor,flow"`
+			People  []*Person `yaml:"people,flow"`
+		}
+		doc.Default = defaultPerson
+		doc.People = people
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf)
+		if err := enc.Encode(doc); err != nil {
+			t.Fatalf("%+v", err)
+		}
+		expect := `default: &default {name: John Smith, age: 20}
+people: [{name: Ken, age: 10}, *default]
+`
+		if expect != buf.String() {
+			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
+		}
+	})
 }
 
 func TestEncodeTable(t *testing.T) {
@@ -1733,7 +1737,7 @@ func TestValueMarshaler(t *testing.T) {
 }
 
 func TestEncodeAnchors(t *testing.T) {
-	t.Run("anchor with merge", func(t *testing.T) {
+	t.Run("anchor in slice", func(t *testing.T) {
 		type Person struct {
 			*Person `yaml:",omitempty"`
 			Name    string `yaml:",omitempty"`
@@ -1749,9 +1753,7 @@ func TestEncodeAnchors(t *testing.T) {
 				Name:   "Ken",
 				Age:    10,
 			},
-			{
-				Person: defaultPerson,
-			},
+			defaultPerson,
 		}
 		var doc struct {
 			Default *Person   `yaml:"default,anchor"`
@@ -1768,10 +1770,9 @@ func TestEncodeAnchors(t *testing.T) {
   name: John Smith
   age: 20
 people:
-- <<: *default
-  name: Ken
+- name: Ken
   age: 10
-- <<: *default
+- *default
 `
 		if expect != buf.String() {
 			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
@@ -1879,7 +1880,7 @@ d: *b
 		}
 		type Queue struct {
 			Name string `yaml:","`
-			*Host
+			Host *Host
 		}
 		var doc struct {
 			Hosts  []*HostDecl `yaml:"hosts"`
@@ -2026,9 +2027,7 @@ staff: *default
 				Name:   "Ken",
 				Age:    10,
 			},
-			{
-				Person: defaultPerson,
-			},
+			defaultPerson,
 		}
 		var doc struct {
 			Default *Person   `yaml:"default,anchor"`
@@ -2044,7 +2043,7 @@ staff: *default
 		expect := `default: &default
   name: John Smith
   age: 20
-people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
+people: [{name: Ken, age: 10}, *default]
 `
 		if expect != buf.String() {
 			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
@@ -2064,9 +2063,7 @@ people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
 				Name:   "Ken",
 				Age:    10,
 			},
-			{
-				Person: defaultPerson,
-			},
+			defaultPerson,
 		}
 		var doc struct {
 			Default *Person   `yaml:"default,anchor,flow"`
@@ -2080,7 +2077,7 @@ people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
 			t.Fatalf("%+v", err)
 		}
 		expect := `default: &default {name: John Smith, age: 20}
-people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
+people: [{name: Ken, age: 10}, *default]
 `
 		if expect != buf.String() {
 			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())
@@ -2100,9 +2097,7 @@ people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
 				Name:   "Ken",
 				Age:    10,
 			},
-			{
-				Person: defaultPerson,
-			},
+			defaultPerson,
 		}
 		var doc struct {
 			Default *Person   `yaml:"default,anchor"`
@@ -2115,7 +2110,7 @@ people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]
 		if err := enc.Encode(doc); err != nil {
 			t.Fatalf("%+v", err)
 		}
-		expect := `{default: &default {name: John Smith, age: 20}, people: [{<<: *default, name: Ken, age: 10}, {<<: *default}]}
+		expect := `{default: &default {name: John Smith, age: 20}, people: [{name: Ken, age: 10}, *default]}
 `
 		if expect != buf.String() {
 			t.Fatalf("expect = [%s], actual = [%s]", expect, buf.String())

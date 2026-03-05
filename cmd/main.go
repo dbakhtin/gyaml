@@ -41,7 +41,7 @@ func main() {
 	toc := TOC{}
 	size := 1000000
 	fmt.Printf("Preparing the slice of %d records\n", size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		name := fmt.Sprintf("Name %v", i)
 		value := fmt.Sprintf("Value %v", i)
 		toc.StatisticsEntries = append(toc.StatisticsEntries, MetadataEntry{Name: name, Value: value})

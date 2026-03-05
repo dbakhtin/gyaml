@@ -3,3 +3,6 @@ gccheck:
 
 gccheckorig:
 	GODEBUG=gctrace=1 go run cmd/main.go --original
+
+fuzz:
+	go test -fuzz=FuzzUnmarshalToMap
