@@ -22,6 +22,12 @@ func TestCustomTable(t *testing.T) {
 		value  any
 	}{
 		{
+			source: "a: \"1\"",
+			value: struct {
+				A int
+			}{1},
+		},
+		{
 			source: "a: 1\nsub:\n  e: 5\n",
 			value: map[string]any{
 				"a": 1,
@@ -75,23 +81,71 @@ func TestCustom(t *testing.T) {
 		})
 	}
 }
-func TestUnmarshalCustom(t *testing.T) {
-	tests := []struct {
-		source string
-		value  any
-	}{
-		{source: "0:\r- 0b0:X\xfe, "},
-		{source: "0:\r-   \r--- "},
-		//
-	}
-	for _, test := range tests {
-		t.Run(test.source, func(t *testing.T) {
+func TestUnmarshal(t *testing.T) {
+	t.Run("document separators", func(t *testing.T) {
+		tests := []struct {
+			source string
+			value  any
+		}{
+			{
+				source: "---\na: b\n",
+				value:  map[string]string{"a": "b"},
+			},
+			{
+				source: "---\n",
+				value:  (*struct{})(nil),
+			},
+			{
+				source: "--- # comment\n",
+				value:  (*struct{})(nil),
+			},
+			{
+				source: "...",
+				value:  (*struct{})(nil),
+			},
+			{
+				source: "... # comment",
+				value:  (*struct{})(nil),
+			},
+			{
+				source: "a: b\n...\nc: d",
+				value:  map[string]string{"a": "b"},
+			},
+			{
+				source: "-a: b\n",
+				value:  map[string]string{"-a": "b"},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.source, func(t *testing.T) {
+				typ := reflect.ValueOf(test.value).Type()
+				value := reflect.New(typ)
+				if err := Unmarshal([]byte(test.source), value.Interface()); err != nil && err != io.EOF {
+					t.Fatalf("%s: %+v", test.source, err)
+				}
+				actual := fmt.Sprintf("%+v", value.Elem().Interface())
+				expect := fmt.Sprintf("%+v", test.value)
+				if actual != expect {
+					t.Fatalf("failed to test [%s], actual=[%s], expect=[%s]", test.source, actual, expect)
+				}
+			})
+		}
+	})
+
+	t.Run("some border cases from fuzz test", func(t *testing.T) {
+		tests := []string{
+			"0:\r- \"\":6 \x7f\xff ",
+			"0:\r- '0'\r- '$- ''\r- ':",
+			"0:\r- 0b0:X\xfe, ",
+			"0:\r-   \r--- ",
+		}
+		for _, test := range tests {
 			var v any
-			if err := Unmarshal([]byte(test.source), &v); err != nil {
+			if err := Unmarshal([]byte(test), &v); err != nil {
 				t.Errorf("%v", err)
 			}
-		})
-	}
+		}
+	})
 }
 
 func TestUnmarshalScalar(t *testing.T) {

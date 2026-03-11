@@ -320,23 +320,34 @@ func (d *decodeState) quickScan() (int, []byte) {
 	data, i := d.data, d.off
 Switch:
 	switch data[i-1] {
-	case '"': // string
-		//skip double-quoted string value
+	case '"':
+		//skip double-quoted string value. We will need what comes after it
+		scopy := d.scan
+		scopy.reset()
+		scopy.step = stateInString
 		for ; i < len(data); i++ {
-			switch data[i] {
-			case '\\':
-				i++ // escaped char
-			case '"':
-				i++ // tokenize the closing quote too
+			if scopy.step(&scopy, data[i]) != scanContinue {
+				// i++ // tokenize the closing quote too
 				break Switch
 			}
 		}
-	case '\'': // single-quoted string
-		//skip too
+		// for ; i < len(data); i++ {
+		// 	switch data[i] {
+		// 	case '\\':
+		// 		i++ // escaped char
+		// 	case '"':
+		// 		i++ // tokenize the closing quote too
+		// 		break Switch
+		// 	}
+		// }
+	case '\'':
+		//skip single quoted string too
+		scopy := d.scan
+		scopy.reset()
+		scopy.step = stateInStringSq
 		for ; i < len(data); i++ {
-			switch data[i] {
-			case '\'':
-				i++ // tokenize the closing quote too
+			if scopy.step(&scopy, data[i]) != scanContinue {
+				// i++ // tokenize the closing quote too
 				break Switch
 			}
 		}
@@ -363,7 +374,10 @@ Switch:
 		if d.scan.isUnqDelim(data[i]) {
 			break
 		}
-		if data[i] == ':' && (i+1 == len(data) || isWhiteSpace(data[i+1])) {
+		//unfortunately have to duplicate some scanner logic here
+		//basically ": " means object key, but.. when key is a quoted string u can skip that whitespace check (atleast in
+		//flow mode for sure), but we let it be for block mode also...
+		if data[i] == ':' && (i+1 == len(data) || isWhiteSpace(data[i+1]) || d.scan.lastc == '"' || d.scan.lastc == '\'') {
 			return scanBeginObject, nil
 		}
 	}
@@ -453,7 +467,7 @@ func (d *decodeState) value(v reflect.Value) error {
 	}
 	switch d.opcode {
 	default:
-		return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("unexpected opcode %d", d.opcode)}
+		return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("unexpected parser code %d", d.opcode)}
 
 	case scanEnd:
 		if v.IsValid() && v.CanSet() {
@@ -772,20 +786,13 @@ func (d *decodeState) object(v reflect.Value) error {
 		}
 
 		// Read key.
-		var key, item []byte
-		var start int
-		//if c == ':' already then key was empty, welcome
-		// if c != ':' {
-		start = d.readIndex()
+		start := d.readIndex()
 		d.rescanLiteral()
-		item = d.data[start:d.readIndex()]
-		var ok bool
-		key, ok = unquoteBytes(item)
+		item := d.data[start:d.readIndex()]
+		key, ok := unquoteBytes(item)
 		if !ok {
 			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("cannot unquote string %s", item)}
-			// panic(phasePanicMsg)
 		}
-		// }
 
 		// Figure out field corresponding to key.
 		var subv reflect.Value
@@ -848,7 +855,6 @@ func (d *decodeState) object(v reflect.Value) error {
 		}
 		if d.opcode != scanObjectKey && d.opcode != scanEnd {
 			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("expected object key, got: %c", d.data[d.readIndex()])}
-			// panic(phasePanicMsg)
 		}
 		depth = len(d.scan.states)
 		d.scanWhile(scanSkipSpace)
@@ -944,7 +950,7 @@ func (d *decodeState) object(v reflect.Value) error {
 						kv = d.keyInterface(key)
 					}
 				default:
-					panic("yaml: Unexpected key type") // should never occur
+					return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: "unexpected key type"}
 				}
 			}
 			if kv.IsValid() {
@@ -1507,7 +1513,7 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 			if fromQuoted {
 				return fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
 			}
-			panic(phasePanicMsg)
+			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: "unmatched quotes"}
 		}
 		return ut.UnmarshalText(s)
 	}
@@ -1669,14 +1675,16 @@ func (d *decodeState) valueInterface() (val any, err error) {
 	}
 	switch d.opcode {
 	default:
-		// panic(phasePanicMsg)
+		return nil, &UnmarshalError{Type: reflect.TypeFor[any](), Offset: d.off, Message: fmt.Sprintf("unexpected parser code %d", d.opcode)}
+	case scanEnd:
+		return nil, nil
 	case scanBeginArray:
 		val, err = d.arrayInterface()
 		//Originally was unconditional, but block arrays dont need this skip
 		if d.readIndex() < len(d.data) && d.data[d.readIndex()] == ']' {
 			d.scanNext()
 		}
-	case scanBeginObject:
+	case scanBeginObject, scanObjectKey:
 		val, err = d.objectInterface()
 		//Originally was unconditional, but block arrays dont need this skip
 		if d.readIndex() < len(d.data) && d.data[d.readIndex()] == '}' {
@@ -1733,8 +1741,8 @@ func (d *decodeState) objectInterface() (map[string]any, error) {
 		if d.opcode == scanEndObject || d.opcode == scanEnd || len(d.scan.states) < depth {
 			break
 		}
-		if d.opcode != scanBeginLiteral && d.opcode != scanBeginObject {
-			panic(phasePanicMsg)
+		if d.opcode != scanBeginLiteral && d.opcode != scanBeginObject && d.opcode != scanObjectKey {
+			return nil, &UnmarshalError{Offset: d.readIndex(), Type: reflect.TypeFor[any](), Message: fmt.Sprintf("unexpected parser code %d", d.opcode)}
 		}
 
 		// Read string key.
@@ -1746,13 +1754,13 @@ func (d *decodeState) objectInterface() (map[string]any, error) {
 		if item[0] == '*' {
 			anchor, ok := d.anchors[string(item[1:])]
 			if !ok {
-				panic(fmt.Errorf("anchor %q not found", item))
+				return nil, &UnmarshalError{Offset: d.readIndex(), Type: reflect.TypeFor[any](), Message: fmt.Sprintf("anchor %q not found", item)}
 			}
 			key = fmt.Sprintf("%v", anchor)
 		} else {
 			key, ok = unquote(item)
 			if !ok {
-				panic(phasePanicMsg)
+				return nil, &UnmarshalError{Offset: d.readIndex(), Type: reflect.TypeFor[any](), Message: fmt.Sprintf("error unquoting %s", item)}
 			}
 		}
 
@@ -1762,7 +1770,6 @@ func (d *decodeState) objectInterface() (map[string]any, error) {
 		}
 		if d.opcode != scanObjectKey {
 			return nil, &UnmarshalError{Offset: d.readIndex(), Type: reflect.TypeFor[map[string]any](), Message: fmt.Sprintf("expected object key, got: %c", d.data[d.readIndex()])}
-			// panic(phasePanicMsg)
 		}
 
 		//if depth decreased then value is empty (==nil) and end of object reached
@@ -1815,13 +1822,10 @@ func (d *decodeState) literalInterface() (any, error) {
 		return v.Interface(), nil
 	case '|', '>':
 		return string(d.parseMultiline(item)), nil
-	default: // number
+	default:
 		item = bytes.TrimRight(item, " ") //those spaces everywhere...
 		if unicode.IsLetter(rune(c)) {
 			return string(item), nil
-		}
-		if c != '-' && (c < '0' || c > '9') {
-			return nil, fmt.Errorf("unexpected character %c in number", c)
 		}
 		n, err := d.convertNumber(string(item))
 		if err != nil {

@@ -33,10 +33,9 @@
 # Encoder
 
 # Decoder
-* remove panics, use error codes. But recover inside unmarshal in case something weird
-** fuzz_test.go
-** test Unmarshal with --- and/or ... included, see Decode table tests
-* yaml_test.go
+** read more about fuzz tests
+* remove fromQuoted param? see methods
+* update cmd for decoder comparison (go-yaml vs gyaml)
 * test my encode + decode in one with compare
 
 # Future TODO

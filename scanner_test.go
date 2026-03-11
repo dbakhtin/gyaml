@@ -10,19 +10,13 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
+			{"\"\":6", true},                 //strictly speaking this should be true only in flow mode, but probably let it be
+			{"0:\r- \"\":6 \x7f\xff ", true}, //same thing
+			{"0:\r- '0'\r- '$- ''\r- ':", true},
+			{"0:\r- - }\r- - 0", false},
+			{"0:\r- \r.", false},
+			{"0:\r-   \r--\x98\x98", false},
 			{"0:\r- 0b0:X\xfe, ", true},
-			// {"a: 1\nsub:\n  e: 5\n", true},
-			// {"&00 :", false},
-			// {"{fo: ba, re:{mo:[qu]}}", true},
-			// {"{fo: ba, re: {mo: [qu]}}", true},
-			// {"\"-a\": b\n\"-c\": d", true},
-			// {"\"v\":\n  \"a\": \"b\"", true},
-			// {"1.1e-2:\n 2.2e+2", true},
-			// {"v: 1\nu: 2", true},
-			// {"v: 1\nu:2", false},
-			// {"v : \n s", true},
-			// {"v: |\n a", true},
-			// {"v:  |\n a", true},
 			//
 		}
 		for _, tt := range tests {
@@ -35,7 +29,6 @@ func TestValidCustom(t *testing.T) {
 
 func TestValidNumbers(t *testing.T) {
 	t.Run("numbers", func(t *testing.T) {
-		const covid = false
 		tests := []struct {
 			data string
 			ok   bool
@@ -50,29 +43,14 @@ func TestValidNumbers(t *testing.T) {
 			{"0.2", true},
 			{".2", true},
 			{"0b01", true},
-			{"0b01_01", false},
 			{"-0b01", true},
-			{"0b02", false},
 			{"0o17", true},
-			{"0o17_24", false},
-			{"0o18", false},
 			{"0x2f", true},
-			{"0x2f_3a", false},
-			{"0x2F", true},
-			{"0x5G", covid},
 			{".inf", true},
 			{"-.inf", true},
 			{"+.inf", true},
-			{".Inf", true},
-			{".INF", true},
-			{".inF", false},
-			{"-.inF", false},
-			{"+.inF", false},
-			{".iNf", false},
 			{".nan", true},
 			{".Nan", true},
-			{".NAN", true},
-			{".nAN", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {

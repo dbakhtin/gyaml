@@ -539,7 +539,7 @@ func stateBeginValueOrEmpty(s *scanner, c byte) int {
 	if c == '}' {
 		//TODO: just call stateEndValue and process this check there in a FlowObjectKey case. This means value is empty
 		n := len(s.states)
-		if n == 0 {
+		if n == 0 || !s.inFlowObject() {
 			return s.error(c, "while not in object")
 		}
 		s.states[n-1] = parseFlowObjectValue
@@ -573,12 +573,6 @@ func stateBeginValue(s *scanner, c byte) int {
 	case '-':
 		s.step = stateHyphen
 		return scanBeginLiteral
-	case '+':
-		s.step = statePlus
-		return scanBeginLiteral
-	case '0': // beginning of 0.123 or 0x1f
-		s.step = state0Begin
-		return scanBeginLiteral
 		//TODO: move '~' to its own state?
 	case '~': //null
 		s.step = stateInStringUnq
@@ -595,6 +589,9 @@ func stateBeginValue(s *scanner, c byte) int {
 	case '.':
 		s.step = stateDotBegin
 		return scanBeginLiteral
+	case '\\', '/', '_', '(', ')', '+':
+		s.step = stateInStringUnq
+		return scanBeginLiteral
 	case '<':
 		s.step = stateBeginMerge
 		return scanBeginLiteral
@@ -605,14 +602,7 @@ func stateBeginValue(s *scanner, c byte) int {
 		s.step = stateBeginComment
 		return scanSkipSpace
 	default:
-		if '1' <= c && c <= '9' { // beginning of 1234.5
-			s.step = state1
-			return scanBeginLiteral
-		}
-
-		//valid unquoted characters at the beginning of a literal. Others are .+- but they are parsed by other cases and
-		//switch into unquoted literal if needed
-		if unicode.IsLetter(rune(c)) || c == '/' || c == '_' || c == '(' || c == ')' {
+		if unicode.IsLetter(rune(c)) || '0' <= c && c <= '9' {
 			s.step = stateInStringUnq
 			return scanBeginLiteral
 		}
@@ -763,9 +753,6 @@ func stateKeyOrUnq(s *scanner, c byte) int {
 		return s.pushObjectState(c)
 		// return stateEndValue(s, c)
 	}
-	// if isUnqTermin(c) {
-	// 	return stateEndValue(s, c)
-	// }
 	s.step = stateInStringUnq
 	return stateInStringUnq(s, c)
 }
@@ -791,14 +778,6 @@ func stateBeginMerge(s *scanner, c byte) int {
 // stateMerge1 is the state after "<<" denoting merge instruction "<<:"
 func stateMerge1(s *scanner, c byte) int {
 	return s.error(c, "in merge instruction which is not supported since yaml 1.2")
-	// if isSpace(c) {
-	// 	return scanContinue
-	// }
-	// if c == ':' {
-	// 	s.step = stateKeyOrUnq
-	// 	return scanContinue
-	// }
-	// return s.error(c, "in merge instruction")
 }
 
 // stateEmptyLine is the state awaiting only white-spaces or comments till the end of line
@@ -1152,7 +1131,7 @@ func stateNewDoc1(s *scanner, c byte) int {
 		s.step = stateNewDoc2
 		return scanContinue
 	}
-	return s.error(c, "in a new document separator")
+	return s.error(c, "in new document --- separator")
 }
 
 // stateNewDoc2 is the state after "--" on a new line
@@ -1161,7 +1140,7 @@ func stateNewDoc2(s *scanner, c byte) int {
 		s.step = stateNewDoc3
 		return scanContinue
 	}
-	return s.error(c, "in a new document separator")
+	return s.error(c, "in new document --- separator")
 }
 
 // stateNewDoc3 is the state after "---" on a new line
@@ -1192,7 +1171,7 @@ func stateEndYaml1(s *scanner, c byte) int {
 		s.step = stateEndYaml2
 		return scanContinue
 	}
-	return s.error(c, "in an end document separator")
+	return s.error(c, "in end document ... separator")
 }
 
 // stateEndYaml2 is the state after ".." on a new line
@@ -1201,7 +1180,7 @@ func stateEndYaml2(s *scanner, c byte) int {
 		s.step = stateEndYaml3
 		return scanContinue
 	}
-	return s.error(c, "in an end document separator")
+	return s.error(c, "in end document ... separator")
 }
 
 // stateEndYaml3 is the state after "..." on a new line
@@ -1224,16 +1203,6 @@ func stateEndYaml3(s *scanner, c byte) int {
 	return s.error(c, "in an end document separator")
 }
 
-// stateBeginArrayValue is the state expecting '-' in "- "
-// func stateBeginArrayValue(s *scanner, c byte) int {
-// 	if c == '-' {
-// 		s.step = stateBeginArrayValueS
-// 		// return scanContinue
-// 		return scanSkipSpace
-// 	}
-// 	return s.error(c, "in array value prefix")
-// }
-
 // stateBeginArrayValueS is the state expecting ' ' in "- "
 func stateBeginArrayValueS(s *scanner, c byte) int {
 	if isSpace(c) {
@@ -1246,229 +1215,29 @@ func stateBeginArrayValueS(s *scanner, c byte) int {
 	return s.error(c, "in array value prefix")
 }
 
-// statePlus is the state after reading `+` at the beginning of a value
-func statePlus(s *scanner, c byte) int {
-	switch {
-	case c == '0':
-		s.step = state0Begin
-		return scanContinue
-	case '1' <= c && c <= '9':
-		s.step = state1
-		return scanContinue
-	case c == '.':
-		s.step = stateDotBegin
-		return scanContinue
-	case unicode.IsLetter(rune(c)):
-		s.step = stateInStringUnq
-		return scanContinue
-	default:
-		return s.error(c, "in numeric literal")
-	}
-}
-
 // stateHyphen is the state after reading `-` during a number or array element
 func stateHyphen(s *scanner, c byte) int {
 	switch {
-	case c == '0':
-		s.step = state0Begin
-		return scanContinue
-	case '1' <= c && c <= '9':
-		s.step = state1
-		return scanContinue
-	case c == ' ', c == '\t':
+	case c == ' ' || c == '\t':
 		return s.pushArrayState(c)
 	case c == '-' && s.idn == 0:
 		s.step = stateNewDoc2
 		return scanContinue
-	case c == '.':
-		s.step = stateDotBegin
-		return scanContinue
-	case unicode.IsLetter(rune(c)):
+	case c == '\r' || c == '\n':
+		return stateEndValue(s, c)
+	default:
 		s.step = stateInStringUnq
 		return scanContinue
-	default:
-		return s.error(c, "in numeric literal")
 	}
-}
-
-// state1 is the state after reading a non-zero integer during a number,
-// such as after reading `1` or `100` but not `0`.
-func state1(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
-		s.step = state1
-		return scanContinue
-	}
-	return state0(s, c)
-}
-
-// state0 is the state after reading `0` during a number.
-func state0(s *scanner, c byte) int {
-	if c == '.' {
-		s.step = stateDot
-		return scanContinue
-	}
-	if c == 'e' || c == 'E' {
-		s.step = stateE
-		return scanContinue
-	}
-	//need to switch to unquoted string as well as run some checks for the current symbol, it may be a line break or anything
-	s.step = stateInStringUnq
-	return stateInStringUnq(s, c)
-}
-
-// state0Begin is the state after reading `0` at the beginning of the value. Compared to state0 it can't be triggered inside number
-func state0Begin(s *scanner, c byte) int {
-	switch c {
-	case '.':
-		s.step = stateDot
-		return scanContinue
-	case 'b':
-		s.step = stateBin
-		return scanContinue
-	case 'o':
-		s.step = stateOct
-		return scanContinue
-	case 'x':
-		s.step = stateHex
-		return scanContinue
-	case 'e', 'E':
-		s.step = stateE
-		return scanContinue
-	default:
-		// return stateEndValue(s, c)
-		return stateInStringUnq(s, c)
-	}
-}
-
-// stateBin is the state after reading 0b - start of binary integer
-func stateBin(s *scanner, c byte) int {
-	if '0' <= c && c <= '1' {
-		s.step = stateBin
-		return scanContinue
-	}
-	return stateEndValue(s, c)
-}
-
-// stateOct is the state after reading 0o - start of octal integer
-func stateOct(s *scanner, c byte) int {
-	if '0' <= c && c <= '7' {
-		s.step = stateOct
-		return scanContinue
-	}
-	return stateEndValue(s, c)
-}
-
-// stateHex is the state after reading 0o - start of octal integer
-func stateHex(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F' {
-		s.step = stateHex
-		return scanContinue
-	}
-	return stateEndValue(s, c)
-}
-
-// stateDot is the state after reading the integer and decimal point in a number,
-// such as after reading `1.`.
-func stateDot(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
-		s.step = stateDot0
-		return scanContinue
-	}
-	// return s.error(c, "after decimal point in numeric literal")
-	return stateInStringUnq(s, c)
 }
 
 // stateDotBegin is the state after reading the '.' at the beginning of a value (unlike stateDot)
 func stateDotBegin(s *scanner, c byte) int {
-	//allow .2 parses without leading 0
-	if '0' <= c && c <= '9' {
-		s.step = stateDot0
-		return scanContinue
-	}
 	if c == '.' && s.idn == 0 {
 		s.step = stateEndYaml2
 		return scanContinue
 	}
-	if c <= 'n' && (c == 'i' || c == 'I' || c == 'n' || c == 'N') {
-		s.step = stateInfNan1
-		return scanContinue
-	}
-	// return s.error(c, "after decimal point in numeric literal")
 	return stateInStringUnq(s, c)
-}
-
-// stateDot0 is the state after reading the integer, decimal point, and subsequent
-// digits of a number, such as after reading `3.14`.
-func stateDot0(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
-		return scanContinue
-	}
-	if c == 'e' || c == 'E' {
-		s.step = stateE
-		return scanContinue
-	}
-	// return stateEndValue(s, c)
-	return stateInStringUnq(s, c)
-}
-
-// stateE is the state after reading the mantissa and e in a number,
-// such as after reading `314e` or `0.314e`.
-func stateE(s *scanner, c byte) int {
-	if c == '+' || c == '-' {
-		s.step = stateESign
-		return scanContinue
-	}
-	return stateESign(s, c)
-}
-
-// stateESign is the state after reading the mantissa, e, and sign in a number,
-// such as after reading `314e-` or `0.314e+`.
-func stateESign(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
-		s.step = stateE0
-		return scanContinue
-	}
-	return stateInStringUnq(s, c)
-}
-
-// stateE0 is the state after reading the mantissa, e, optional sign,
-// and at least one digit of the exponent in a number,
-// such as after reading `314e-2` or `0.314e+1` or `3.14e0`.
-func stateE0(s *scanner, c byte) int {
-	if '0' <= c && c <= '9' {
-		return scanContinue
-	}
-	return stateInStringUnq(s, c)
-}
-
-// stateInfNan1 is the state after reading ".i" or ".n" supposing ".inf", ".nan" literals with some caps variants
-func stateInfNan1(s *scanner, c byte) int {
-	if (s.lastc == 'i' || s.lastc == 'I') && c == 'n' || //.inf, .Inf
-		(s.lastc == 'I' && c == 'N') { //.INF
-		s.step = stateInfNan2
-		return scanContinue
-	}
-	if (s.lastc == 'n' || s.lastc == 'N') && c == 'a' || //.nan, .Nan
-		(s.lastc == 'N' && c == 'A') { //.NAN
-		s.step = stateInfNan2
-		return scanContinue
-	}
-	return s.error(c, "in .inf/.nan")
-}
-
-// stateInfNan2 is the state after reading ".in" or ".na" supposing ".inf", ".nan" literals with some caps variants
-func stateInfNan2(s *scanner, c byte) int {
-	if s.lastc == 'n' && c == 'f' || //.inf, .Inf
-		s.lastc == 'N' && c == 'F' { //.INF
-		s.step = stateEndValue
-		return scanContinue
-	}
-	if s.lastc == 'a' && (c == 'n' || c == 'N') || //.nan, .Nan, .NaN
-		s.lastc == 'A' && c == 'N' { //.NAN
-		s.step = stateEndValue
-		return scanContinue
-	}
-	return s.error(c, "in .inf/.nan")
 }
 
 // stateExplicitType1 is the state after reading '!' at the value beginning
