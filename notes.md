@@ -35,6 +35,7 @@
 # Decoder
 * remove panics, use error codes. But recover inside unmarshal in case something weird
 ** fuzz_test.go
+** test Unmarshal with --- and/or ... included, see Decode table tests
 * yaml_test.go
 * test my encode + decode in one with compare
 

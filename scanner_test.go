@@ -10,12 +10,19 @@ func TestValidCustom(t *testing.T) {
 			data string
 			ok   bool
 		}{
-			{`
-step:
-  street: |
-      123 Tornado
-  city: East Center
-`, true},
+			{"0:\r- 0b0:X\xfe, ", true},
+			// {"a: 1\nsub:\n  e: 5\n", true},
+			// {"&00 :", false},
+			// {"{fo: ba, re:{mo:[qu]}}", true},
+			// {"{fo: ba, re: {mo: [qu]}}", true},
+			// {"\"-a\": b\n\"-c\": d", true},
+			// {"\"v\":\n  \"a\": \"b\"", true},
+			// {"1.1e-2:\n 2.2e+2", true},
+			// {"v: 1\nu: 2", true},
+			// {"v: 1\nu:2", false},
+			// {"v : \n s", true},
+			// {"v: |\n a", true},
+			// {"v:  |\n a", true},
 			//
 		}
 		for _, tt := range tests {
@@ -237,7 +244,7 @@ func TestValidMap(t *testing.T) {
 			{"1:\n2", false},
 			{"1.1:\n 2.2", true},
 			{"1.1e-2:\n 2.2e+2", true},
-			{"1.1e-2:\n 2.2e+ 2", false},
+			{"1.1e-2:\n 2.2e+ 2", true}, //incorrect numbers are parsed as strings
 			{"v: !!float 2.3", true},
 			{"v: 2015-01-01", true},
 			{"a: b\rc: d", true},
@@ -264,6 +271,7 @@ func TestValidMap(t *testing.T) {
 			{"v:\n  u:\n  2", false},
 			{"v:\n  u:\n   t:\n   2", false},
 			{"v:\n u: c\nt: b", true},
+			{"a: 1\nsub:\n  e: 5\n", true},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {
@@ -517,6 +525,37 @@ func TestValidComment(t *testing.T) {
 			{"v:\n  a: 1\n# comment\nu: 2", true},
 			{"v:\n  a: 1\n # comment\nu: 2", true},
 			{"'v': '1' # comment", true},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}
+
+func TestFailedfuzz(t *testing.T) {
+	t.Run("tests that failed fuzz_test.go", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"{a: &a c, *a : b}", true},
+			{"- : ", false},
+			{" : ", false},
+			{"-1: \r - : ", false},
+			{"v: [{a: b}, {c: d, e: f}]", true},
+			//---
+			{"-1: - : - ", false},
+			{"0: 0:", false},
+			{"v: a: b", false},
+			{"0: 0:", false},
+			{"-1: - : - ", false},
+			{"&0 }", false},
+			{"0:\n 0: ", true},
+			{" \"\":", true},
+			{"{'", false},
+			{"&00 :", false},
 		}
 		for _, tt := range tests {
 			if ok := Valid([]byte(tt.data)); ok != tt.ok {

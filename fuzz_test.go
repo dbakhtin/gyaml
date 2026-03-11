@@ -47,8 +47,25 @@ verified: true
 
 	f.Fuzz(func(t *testing.T, src []byte) {
 		v := map[string]any{}
+		t.Logf("fuzz testing: [%s]\n", src)
 		if err := Unmarshal(src, &v); err != nil {
 			t.Log(err.Error())
 		}
 	})
+}
+
+func TestFuzzHanged(t *testing.T) {
+	table := []struct {
+		source string
+	}{
+		{"0: 0:"},
+	}
+	for _, test := range table {
+		t.Run(test.source, func(t *testing.T) {
+			v := map[string]any{}
+			if err := Unmarshal([]byte(test.source), &v); err == nil {
+				t.Errorf("expected error, got nil")
+			}
+		})
+	}
 }

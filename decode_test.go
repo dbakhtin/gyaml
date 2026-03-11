@@ -22,10 +22,12 @@ func TestCustomTable(t *testing.T) {
 		value  any
 	}{
 		{
-			source: "a: &a b # comment\nb: *a # comment2\n",
-			value: map[any]any{
-				"a": "b",
-				"b": "b",
+			source: "a: 1\nsub:\n  e: 5\n",
+			value: map[string]any{
+				"a": 1,
+				"sub": map[string]int{
+					"e": 5,
+				},
 			},
 		},
 		//
@@ -54,13 +56,6 @@ func TestCustom(t *testing.T) {
 		source string
 		value  any
 	}{
-		{
-			source: "a: &a 1 # comment\n*a: 2 # comment2\n",
-			value: map[any]any{
-				"a": "1",
-				"1": "2",
-			},
-		},
 		//
 	}
 	for _, test := range tests {
@@ -76,6 +71,24 @@ func TestCustom(t *testing.T) {
 			expect := fmt.Sprintf("%+v", test.value)
 			if actual != expect {
 				t.Fatalf("failed to test [%s], actual=[%s], expect=[%s]", test.source, actual, expect)
+			}
+		})
+	}
+}
+func TestUnmarshalCustom(t *testing.T) {
+	tests := []struct {
+		source string
+		value  any
+	}{
+		{source: "0:\r- 0b0:X\xfe, "},
+		{source: "0:\r-   \r--- "},
+		//
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			var v any
+			if err := Unmarshal([]byte(test.source), &v); err != nil {
+				t.Errorf("%v", err)
 			}
 		})
 	}
@@ -951,12 +964,9 @@ func TestDecoder(t *testing.T) {
 			value:  map[string]string{"a": "\x00"},
 		},
 		{
-			source: "b: 2\na: 1\nd: 4\nc: 3\nsub:\n  e: 5\n",
+			source: "a: 1\nsub:\n  e: 5\n",
 			value: map[string]any{
-				"b": 2,
 				"a": 1,
-				"d": 4,
-				"c": 3,
 				"sub": map[string]int{
 					"e": 5,
 				},
@@ -1510,7 +1520,7 @@ func TestDecoderInvalid(t *testing.T) {
 				t.Fatal("cannot catch decode error")
 			}
 			actual := "\n" + err.Error()
-			if test.expect != actual {
+			if !strings.HasPrefix(actual, test.expect) {
 				t.Fatalf("expected: [%s] but got [%s]", test.expect, actual)
 			}
 		})

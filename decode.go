@@ -63,6 +63,23 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		return err
 	}
 
+	//Unmarshal should support only single document in buffer
+	//if there is a new document separator "---" the first occurence is the document beginning
+	start := documentStartIndex(data)
+	if start > 0 {
+		data = data[start:]
+		startNext := documentStartIndex(data)
+		if startNext > 0 {
+			n := max(0, startNext-4)
+			data = data[:n]
+		}
+	}
+
+	//if there is an end document separator "..." ignore data after it
+	end := documentEndIndex(data)
+	if end > -1 {
+		data = data[:end]
+	}
 	d.init(data)
 	return d.unmarshal(v)
 }
@@ -74,6 +91,18 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 // if it wishes to retain the data after returning.
 type Unmarshaler interface {
 	UnmarshalYAML([]byte) error
+}
+
+// An UnmarshalError describes a generic YAML unmarshal error
+// Is intended to replace original (coming from json) panics with errors for readability
+type UnmarshalError struct {
+	Offset  int
+	Type    reflect.Type
+	Message string
+}
+
+func (e *UnmarshalError) Error() string {
+	return "yaml: cannot unmarshal into type " + e.Type.String() + ", " + e.Message + ", offset: " + strconv.FormatInt(int64(e.Offset), 10)
 }
 
 // An UnmarshalTypeError describes a YAML value that was
@@ -124,7 +153,12 @@ func (e *InvalidUnmarshalError) Error() string {
 	return "yaml: Unmarshal(nil " + e.Type.String() + ")"
 }
 
-func (d *decodeState) unmarshal(v any) error {
+func (d *decodeState) unmarshal(v any) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = d.addErrorContext(fmt.Errorf("recovered panic: %v", p))
+		}
+	}()
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return &InvalidUnmarshalError{reflect.TypeOf(v)}
@@ -134,7 +168,7 @@ func (d *decodeState) unmarshal(v any) error {
 	d.scanWhile(scanSkipSpace)
 	// We decode rv not rv.Elem because the Unmarshaler interface
 	// test must be applied at the top level of the value.
-	err := d.value(rv)
+	err = d.value(rv)
 	if err != nil {
 		return d.addErrorContext(err)
 	}
@@ -419,7 +453,7 @@ func (d *decodeState) value(v reflect.Value) error {
 	}
 	switch d.opcode {
 	default:
-		panic(phasePanicMsg)
+		return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("unexpected opcode %d", d.opcode)}
 
 	case scanEnd:
 		if v.IsValid() && v.CanSet() {
@@ -440,7 +474,8 @@ func (d *decodeState) value(v reflect.Value) error {
 			d.scanNext()
 		}
 
-	case scanBeginObject:
+	// case scanBeginObject:
+	case scanBeginObject, scanObjectKey:
 		if v.IsValid() {
 			if err := d.object(v); err != nil {
 				return err
@@ -570,7 +605,10 @@ func (d *decodeState) array(v reflect.Value) error {
 	case reflect.Interface:
 		if v.NumMethod() == 0 {
 			// Decoding into nil interface? Switch to non-reflect code.
-			ai := d.arrayInterface()
+			ai, err := d.arrayInterface()
+			if err != nil {
+				return err
+			}
 			v.Set(reflect.ValueOf(ai))
 			return nil
 		}
@@ -674,7 +712,10 @@ func (d *decodeState) object(v reflect.Value) error {
 
 	// Decoding into nil interface? Switch to non-reflect code.
 	if v.Kind() == reflect.Interface && v.NumMethod() == 0 {
-		oi := d.objectInterface()
+		oi, err := d.objectInterface()
+		if err != nil {
+			return err
+		}
 		v.Set(reflect.ValueOf(oi))
 		return nil
 	}
@@ -731,13 +772,20 @@ func (d *decodeState) object(v reflect.Value) error {
 		}
 
 		// Read key.
-		start := d.readIndex()
+		var key, item []byte
+		var start int
+		//if c == ':' already then key was empty, welcome
+		// if c != ':' {
+		start = d.readIndex()
 		d.rescanLiteral()
-		item := d.data[start:d.readIndex()]
-		key, ok := unquoteBytes(item)
+		item = d.data[start:d.readIndex()]
+		var ok bool
+		key, ok = unquoteBytes(item)
 		if !ok {
-			panic(phasePanicMsg)
+			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("cannot unquote string %s", item)}
+			// panic(phasePanicMsg)
 		}
+		// }
 
 		// Figure out field corresponding to key.
 		var subv reflect.Value
@@ -799,7 +847,8 @@ func (d *decodeState) object(v reflect.Value) error {
 			d.scanWhile(scanSkipSpace)
 		}
 		if d.opcode != scanObjectKey && d.opcode != scanEnd {
-			panic(phasePanicMsg)
+			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: fmt.Sprintf("expected object key, got: %c", d.data[d.readIndex()])}
+			// panic(phasePanicMsg)
 		}
 		depth = len(d.scan.states)
 		d.scanWhile(scanSkipSpace)
@@ -817,8 +866,14 @@ func (d *decodeState) object(v reflect.Value) error {
 		if v.Kind() == reflect.Map {
 			kt := t.Key()
 			var kv reflect.Value
-			//if key is an alias
-			if key[0] == '*' {
+			if len(key) == 0 {
+				if len(item) > 0 && (item[0] == '"' || item[0] == '\'') {
+					kv = reflect.ValueOf(string(key))
+				} else {
+					kv = d.keyInterface(key)
+				}
+			} else if key[0] == '*' {
+				//if key is an alias
 				var found bool
 				//TODO: check types? xD
 				kv, found = d.anchors[string(key[1:])]
@@ -1205,6 +1260,9 @@ func (d *decodeState) storeNull(_ []byte, v reflect.Value, _ bool) error {
 // keyInterface tries to parse item value when no type is specified (mainly when decoding keys for map[any]...)
 // unlike valueInterface func it does not read from input buffer but operates on the given item
 func (d *decodeState) keyInterface(item []byte) reflect.Value {
+	if len(item) == 0 {
+		return reflect.ValueOf(nil)
+	}
 	//item is already unquoted
 	s := string(item)
 	switch c := item[0]; {
@@ -1393,7 +1451,8 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 	// Check for unmarshaler?
 	if len(item) == 0 {
 		// Empty string given.
-		d.saveError(fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+		v.SetZero()
+		// d.saveError(fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
 		return nil
 	}
 
@@ -1596,7 +1655,7 @@ func (d *decodeState) parseMultiline(item []byte) []byte {
 // but they avoid the weight of reflection in this common case.
 
 // valueInterface is like value but returns any.
-func (d *decodeState) valueInterface() (val any) {
+func (d *decodeState) valueInterface() (val any, err error) {
 	//because this no json, if literal opcode, need to make sure it's not a nested block object key "a: "
 	//or array element "- a"
 	if d.opcode == scanBeginLiteral && (d.scan.inBlockArray() || d.scan.inBlockObject()) {
@@ -1610,27 +1669,27 @@ func (d *decodeState) valueInterface() (val any) {
 	}
 	switch d.opcode {
 	default:
-		panic(phasePanicMsg)
+		// panic(phasePanicMsg)
 	case scanBeginArray:
-		val = d.arrayInterface()
+		val, err = d.arrayInterface()
 		//Originally was unconditional, but block arrays dont need this skip
 		if d.readIndex() < len(d.data) && d.data[d.readIndex()] == ']' {
 			d.scanNext()
 		}
 	case scanBeginObject:
-		val = d.objectInterface()
+		val, err = d.objectInterface()
 		//Originally was unconditional, but block arrays dont need this skip
 		if d.readIndex() < len(d.data) && d.data[d.readIndex()] == '}' {
 			d.scanNext()
 		}
 	case scanBeginLiteral:
-		val = d.literalInterface()
+		val, err = d.literalInterface()
 	}
 	return
 }
 
 // arrayInterface is like array but returns []any.
-func (d *decodeState) arrayInterface() []any {
+func (d *decodeState) arrayInterface() ([]any, error) {
 	var v = make([]any, 0)
 	depth := len(d.scan.states)
 	if !d.scan.inFlowArray() {
@@ -1645,7 +1704,11 @@ func (d *decodeState) arrayInterface() []any {
 			break
 		}
 
-		v = append(v, d.valueInterface())
+		val, err := d.valueInterface()
+		if err != nil {
+			return nil, err
+		}
+		v = append(v, val)
 
 		if d.opcode == scanSkipSpace {
 			d.scanWhile(scanSkipSpace)
@@ -1654,12 +1717,12 @@ func (d *decodeState) arrayInterface() []any {
 			break
 		}
 	}
-	return v
+	return v, nil
 }
 
 // objectInterface is like object but returns map[string]any.
 // TODO: probably should upgrade it to map[any]any at some point for more flexibility
-func (d *decodeState) objectInterface() map[string]any {
+func (d *decodeState) objectInterface() (map[string]any, error) {
 	m := make(map[string]any)
 	for {
 		c := d.data[d.off-1]
@@ -1698,7 +1761,8 @@ func (d *decodeState) objectInterface() map[string]any {
 			d.scanWhile(scanSkipSpace)
 		}
 		if d.opcode != scanObjectKey {
-			panic(phasePanicMsg)
+			return nil, &UnmarshalError{Offset: d.readIndex(), Type: reflect.TypeFor[map[string]any](), Message: fmt.Sprintf("expected object key, got: %c", d.data[d.readIndex()])}
+			// panic(phasePanicMsg)
 		}
 
 		//if depth decreased then value is empty (==nil) and end of object reached
@@ -1710,7 +1774,11 @@ func (d *decodeState) objectInterface() map[string]any {
 		}
 
 		// Read value.
-		m[key] = d.valueInterface()
+		value, err := d.valueInterface()
+		if err != nil {
+			return nil, err
+		}
+		m[key] = value
 
 		if d.opcode == scanSkipSpace {
 			d.scanWhile(scanSkipSpace)
@@ -1719,13 +1787,13 @@ func (d *decodeState) objectInterface() map[string]any {
 			break
 		}
 	}
-	return m
+	return m, nil
 }
 
 // literalInterface consumes and returns a literal from d.data[d.off-1:] and
 // it reads the following byte ahead. The first byte of the literal has been
 // read already (that's how the caller knows it's a literal).
-func (d *decodeState) literalInterface() any {
+func (d *decodeState) literalInterface() (any, error) {
 	// All bytes inside literal return scanContinue op code.
 	start := d.readIndex()
 	d.rescanLiteral()
@@ -1736,30 +1804,31 @@ func (d *decodeState) literalInterface() any {
 	case '"', '\'': // string
 		s, ok := unquote(item)
 		if !ok {
-			panic(phasePanicMsg)
+			return nil, fmt.Errorf("cannot unquote string %s", item)
 		}
-		return s
+		return s, nil
 	case '*':
 		v, found := d.anchors[string(item[1:])]
 		if !found {
-			panic(fmt.Errorf("anchor %q not found", string(item)))
+			return nil, fmt.Errorf("anchor %q not found", string(item))
 		}
-		return v.Interface()
+		return v.Interface(), nil
 	case '|', '>':
-		return string(d.parseMultiline(item))
+		return string(d.parseMultiline(item)), nil
 	default: // number
 		item = bytes.TrimRight(item, " ") //those spaces everywhere...
 		if unicode.IsLetter(rune(c)) {
-			return string(item)
+			return string(item), nil
 		}
 		if c != '-' && (c < '0' || c > '9') {
-			panic(phasePanicMsg)
+			return nil, fmt.Errorf("unexpected character %c in number", c)
 		}
 		n, err := d.convertNumber(string(item))
 		if err != nil {
-			return string(item)
+			//return string representation
+			return string(item), nil
 		}
-		return n
+		return n, nil
 	}
 }
 

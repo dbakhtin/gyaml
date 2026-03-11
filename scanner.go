@@ -16,6 +16,7 @@ package gyaml
 // before diving into the scanner itself.
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 	"unicode"
@@ -59,7 +60,7 @@ type SyntaxError struct {
 	Offset int64  // error occurred after reading Offset bytes
 }
 
-func (e *SyntaxError) Error() string { return e.msg }
+func (e *SyntaxError) Error() string { return fmt.Sprintf("%s, offset: %d", e.msg, e.Offset) }
 
 // A scanner is a JSON scanning state machine.
 // Callers call scan.reset and then pass bytes in one at a time
@@ -92,6 +93,9 @@ type scanner struct {
 	//last meaningful (non-whitespace) value of byte input. Though this goes against strict state machine definition it
 	//may help in some border cases. For example to distinguish ':' in "a: b" (object key + value) and "a:b" (unquoted string)
 	lastc byte
+	//sameLine is a flag, set to true after a block object key found and reset on new line
+	//the only purpose atm is to catch "a: b: c" and "a: - b" error cases
+	sameLine bool
 
 	// Error that happened, if any.
 	err error
@@ -178,6 +182,7 @@ func (s *scanner) reset() {
 	s.err = nil
 	s.endTop = false
 	s.lastc = 0
+	s.sameLine = false
 }
 
 // eof tells the scanner that the end of input has been reached.
@@ -189,12 +194,20 @@ func (s *scanner) eof() int {
 	if s.endTop {
 		return scanEnd
 	}
+	//if by this time stack contains any flow state then no matching ] or } found, report error
+	for _, state := range s.states {
+		if state == parseFlowArrayValue || state == parseFlowObjectKey || state == parseFlowObjectValue {
+			s.err = &SyntaxError{"unexpected end of input", s.bytes}
+			return scanError
+		}
+	}
 
 	s.step(s, '\n')
 	if s.endTop || s.err == nil {
 		return scanEnd
 	}
 
+	s.err = &SyntaxError{"unexpected end of input", s.bytes}
 	return scanError
 }
 
@@ -232,15 +245,55 @@ func (s *scanner) pushState(c byte, newState int, successState int) int {
 	return s.error(c, "exceeded max depth")
 }
 
+// a more specialized pushState for a block object with indent checks
+func (s *scanner) pushObjectState(c byte) int {
+	n := len(s.states)
+	diff := indentDiff(s)
+	s.step = stateBeginValueOrEmpty
+	if n == 0 ||
+		s.states[n-1] == parseObjectValue && diff > 0 ||
+		// s.states[n-1] == parseObjectValue && diff >= 0 ||
+		s.states[n-1] == parseArrayValue && diff >= 0 {
+		s.sameLine = true
+		s.pushState(c, parseObjectValue, scanObjectValue)
+		if isLineBreak(c) {
+			return endLine(s, scanObjectKey)
+		}
+		// s.step = stateBeginValueOrEmpty
+		return scanObjectKey
+	}
+	//if we are here then input looks like "a: b:" which is invalid
+	if n > 0 && s.states[n-1] == parseObjectValue && s.sameLine {
+		return s.error(c, "expected object value, got key")
+	}
+
+	s.toggleObjectState()
+	//if ":{" without space between ...
+	if c == '{' {
+		return s.pushState(c, parseFlowObjectKey, scanBeginObject)
+	}
+	//if ":[" without space between ...
+	if c == '[' {
+		return s.pushState(c, parseFlowArrayValue, scanBeginArray)
+	}
+	if isLineBreak(c) {
+		return endLine(s, scanObjectKey)
+	}
+	return scanObjectKey
+}
+
 // a more specialized pushState for a block array with indent checks
 func (s *scanner) pushArrayState(c byte) int {
+	//if we are here then input looks like "a: - b" which is invalid
+	if s.sameLine {
+		return s.error(c, "unexpected array value")
+	}
 	n := len(s.states)
 	s.idn += 2 //"- "
 	idiff := indentDiff(s)
 	// if top level first element or nested inside object or array of arrays
 	if n == 0 ||
-		idiff > 0 &&
-			(s.states[n-1] == parseArrayValue || s.states[n-1] == parseObjectValue) {
+		idiff > 0 && (s.states[n-1] == parseArrayValue || s.states[n-1] == parseObjectValue) {
 		s.pushState(c, parseArrayValue, scanArrayValue)
 		s.step = stateBeginValueOrEmpty
 		return scanSkipSpace
@@ -466,6 +519,7 @@ func stateBeginLine(s *scanner, c byte) int {
 func endLine(s *scanner, opcode int) int {
 	s.idn = 0
 	s.step = stateBeginLine
+	s.sameLine = false
 	return opcode
 }
 
@@ -474,13 +528,20 @@ func stateBeginValueOrEmpty(s *scanner, c byte) int {
 	if isSpace(c) {
 		return scanSkipSpace
 	}
-	//end of flow array or delimiter with empty value
-	if c == ':' || c == ']' || c == ',' {
+	if isLineBreak(c) {
+		return endLine(s, scanSkipSpace)
+	}
+	//end of flow array or delimiter
+	// if c == ':' || c == ']' || c == ',' {
+	if c == ']' || c == ',' {
 		return stateEndValue(s, c)
 	}
 	if c == '}' {
 		//TODO: just call stateEndValue and process this check there in a FlowObjectKey case. This means value is empty
 		n := len(s.states)
+		if n == 0 {
+			return s.error(c, "while not in object")
+		}
 		s.states[n-1] = parseFlowObjectValue
 		return stateEndValue(s, c)
 	}
@@ -562,28 +623,34 @@ func stateBeginValue(s *scanner, c byte) int {
 // stateEndValue is the state after completing a value,
 // such as after reading `{}` or `true` or `["x"`.
 func stateEndValue(s *scanner, c byte) int {
-	//skip spaces after the quoted string end, unquoted is fine
-	if (s.lastc == '"' || s.lastc == '\'' || s.lastc == ']') && isSpace(c) {
+	if isSpace(c) {
 		s.step = stateEndValue
 		return scanSkipSpace
 	}
+	//TODO: remove next if !!!!!!!!!
+	//skip spaces after the quoted string end, unquoted is fine
+	// if (s.lastc == '"' || s.lastc == '\'' || s.lastc == ']') && isSpace(c) {
+	// 	s.step = stateEndValue
+	// 	return scanSkipSpace
+	// }
 	if c == '#' {
 		s.step = stateBeginComment
 		return scanSkipSpace
 	}
-	n := len(s.states)
-	if c == ':' || s.lastc == ':' && (isSpace(c) || isLineBreak(c)) {
-		if n == 0 ||
-			s.states[n-1] == parseObjectValue && indentDiff(s) > 0 ||
-			s.states[n-1] == parseArrayValue && indentDiff(s) >= 0 {
-			s.pushState(c, parseObjectValue, scanObjectValue)
-			if isLineBreak(c) {
-				return endLine(s, scanObjectKey)
-			}
-			s.step = stateBeginValueOrEmpty
-			return scanObjectKey
-		}
+	//for quoted keys need to check here... for unquoted & numbers this is done in a stateKeyOrUnq
+	if c == ':' {
+		//if state is pushed successfully return, because it is already parseObjectValue
+		// if code := s.pushObjectState(c); code != scanContinue {
+		// 	return code
+		// }
+		return s.pushObjectState(c)
 	}
+	n := len(s.states)
+	// if c == ':' || s.lastc == ':' && (isSpace(c) || isLineBreak(c)) {
+	// 	if code := s.pushObjectState(c); code != scanContinue {
+	// 		return code
+	// 	}
+	// }
 	if n == 0 {
 		// Completed top-level before the current byte.
 		s.step = stateEndTop
@@ -693,11 +760,13 @@ func stateEndYaml(s *scanner, c byte) int {
 func stateKeyOrUnq(s *scanner, c byte) int {
 	// if isSpace(c) || s.lastc == ':' && isLineBreak(c) {
 	if isSpace(c) || s.isUnqDelim(c) {
-		return stateEndValue(s, c)
+		return s.pushObjectState(c)
+		// return stateEndValue(s, c)
 	}
 	// if isUnqTermin(c) {
 	// 	return stateEndValue(s, c)
 	// }
+	s.step = stateInStringUnq
 	return stateInStringUnq(s, c)
 }
 
@@ -901,7 +970,8 @@ func stateInAlias(s *scanner, c byte) int {
 		return scanContinue
 	}
 	if isSpace(c) {
-		s.step = stateBeginValueOrEmpty
+		// s.step = stateBeginValueOrEmpty
+		s.step = stateEndValue
 		return scanSkipSpace
 	}
 	if isLineBreak(c) || c == ':' || s.isUnqDelim(c) {
@@ -1358,7 +1428,7 @@ func stateESign(s *scanner, c byte) int {
 		s.step = stateE0
 		return scanContinue
 	}
-	return s.error(c, "in exponent of numeric literal")
+	return stateInStringUnq(s, c)
 }
 
 // stateE0 is the state after reading the mantissa, e, optional sign,
@@ -1368,7 +1438,7 @@ func stateE0(s *scanner, c byte) int {
 	if '0' <= c && c <= '9' {
 		return scanContinue
 	}
-	return stateEndValue(s, c)
+	return stateInStringUnq(s, c)
 }
 
 // stateInfNan1 is the state after reading ".i" or ".n" supposing ".inf", ".nan" literals with some caps variants

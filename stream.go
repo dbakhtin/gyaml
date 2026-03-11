@@ -57,6 +57,11 @@ func documentStartIndex(buf []byte) int {
 	idx := bytes.Index(buf, append([]byte{'\n'}, newDocumentSeparator...))
 	if idx > -1 {
 		return idx + 4
+	} else {
+		idxr := bytes.Index(buf, append([]byte{'\r'}, newDocumentSeparator...))
+		if idxr > -1 {
+			return idxr + 4
+		}
 	}
 	return 0
 }
@@ -66,9 +71,12 @@ func documentStartIndex(buf []byte) int {
 // separator should either be the first value (then document is empty) or start from a new line
 func documentEndIndex(buf []byte) int {
 	idx := bytes.Index(buf, append([]byte{'\n'}, endDocumentSeparator...))
-	if idx == -1 && bytes.HasPrefix(buf, endDocumentSeparator) {
-		//document empty
-		idx = 0
+	if idx == -1 {
+		if bytes.HasPrefix(buf, endDocumentSeparator) {
+			//document empty
+			return 0
+		}
+		return bytes.Index(buf, append([]byte{'\r'}, endDocumentSeparator...))
 	}
 	return idx
 }
@@ -92,7 +100,6 @@ func (dec *Decoder) Decode(v any) error {
 	}
 
 	// Read whole value into buffer.
-	//TODO: readValue should stop on each "\n---\n" or "\n...\n"?
 	n, err := dec.readValue()
 	if err != nil {
 		return err
