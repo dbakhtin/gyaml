@@ -14,7 +14,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
-	"github.com/denisbakhtin/gyaml"
+	"github.com/dbakhtin/gyaml"
 )
 
 var (

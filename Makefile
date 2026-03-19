@@ -1,28 +1,28 @@
-.PHONY: encode encodeorig decode decodeorig cpuprof fuzz build
+.PHONY: encode encodev2 decode decodev2 cpuprof fuzz build
 
 encode: build
+	@echo ">>> gyaml encoder <<<"
 	@cmd/cmd
-
-encodev2: build
-	@cmd/cmd --v2
-
-encodeorig: build
+	@echo ">>> go-yaml encoder <<<"
 	@cmd/cmd --original
 
-encodeorigv2: build
-	@cmd/cmd --v2 --original
+encodev2: build
+	@echo ">>> gyaml encoder, more compex data <<<"
+	@cmd/cmd --v2
+	@echo ">>> go-yaml encoder, more complex data <<<"
+	@cmd/cmd --original --v2
 
 decode: build
+	@echo ">>> gyaml decoder <<<"
 	@cmd/cmd --decode
-
-decodev2: build
-	@cmd/cmd --v2 --decode
-
-decodeorig: build
+	@echo ">>> go-yaml decoder <<<"
 	@cmd/cmd --original --decode
 
-decodeorigv2: build
-	@cmd/cmd --v2 --original --decode
+decodev2: build
+	@echo ">>> gyaml decoder, more complex data <<<"
+	@cmd/cmd --decode --v2
+	@echo ">>> go-yaml decoder, more complex data <<<"
+	@cmd/cmd --original --decode --v2
 
 build:
 	@go build -o cmd/cmd cmd/main.go

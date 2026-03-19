@@ -7,8 +7,8 @@ The gyaml package enables Go programs to encode and decode YAML text. It was bas
 This package is in its early stage, so errors may occur. Please file an issue with a brief example to help me debug and improve the code. Thank you.
 
 ## Performance comparison (see Makefile & cmd/main.go for a synthetic example):
-* Encoding faster upto **12-15** times than go-yaml, 10-12 times less memory & gc pressure (`make encode` vs `make encodeorig` and `make encodev2` vs `make encodeorigv2`)
-* Decoding faster upto **7-9** times than go-yaml, 15-18 times less memory & gc pressure (`make decode` vs `make decodeorig` and `make decodev2` vs `make decodeorigv2`)
+* Encoding faster upto **12-15** times than go-yaml, 10-12 times less memory & gc pressure (`make encode` and `make encodev2` for a little bit more complex data structure)
+* Decoding faster upto **7-9** times than go-yaml, 15-18 times less memory & gc pressure (`make decode` and `make decodev2`, run them only after encoders have created a corresponding test yaml file)
 
 ## Key differencies from original go-yaml
 * No MarhshalWithOptions, encoder declaration is closer to encoding/json. So use NewEncoder(...).WithOption for advanced cases.
