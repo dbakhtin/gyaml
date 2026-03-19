@@ -36,4 +36,4 @@ The gyaml package supports most of YAML 1.2 and does not support merging from YA
 * Improve performance.
 
 ## License
-BSD-style license, see LICENSE file.
+BSD-2 simplified license, see LICENSE file.
