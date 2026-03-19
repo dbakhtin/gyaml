@@ -1,4 +1,4 @@
-module github.com/denisbakhtin/gyaml
+module github.com/dbakhtin/gyaml
 
 go 1.25.3
 
