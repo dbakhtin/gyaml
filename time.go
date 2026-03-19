@@ -21,7 +21,7 @@ var timestampFormats = []string{
 const legalTimeChars = "0123456789-: tTZ."
 
 func isTimestamp(value string) bool {
-	//rough check if not a timestamp, saves a looot of cpu
+	//rough check if not a timestamp, saves cpu
 	n := len(value)
 	if n < 3 || n > len(time.RFC3339Nano) {
 		return false

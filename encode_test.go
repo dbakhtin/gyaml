@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 var zero = 0
@@ -492,6 +494,11 @@ func TestEncodeTime(t *testing.T) {
 		{
 			"v: \"0001-01-01T00:00:00Z\"\n",
 			map[string]time.Time{"v": {}},
+			nil,
+		},
+		{
+			"v: \"2015-01-01T00:00:00Z\"\n",
+			struct{ V time.Time }{V: time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC)},
 			nil,
 		},
 		{
@@ -2535,5 +2542,74 @@ func TestEncodeScalar(t *testing.T) {
 			t.Errorf("expected [%s] got [%s]", test.result, string(res))
 		}
 		buf.Reset()
+	}
+}
+
+func TestEncodeFromExampleV2(t *testing.T) {
+	type MetadataEntryV2 struct {
+		Name    string
+		Size    int64
+		Volume  float64
+		Enabled bool
+		Since   time.Time
+		Codes   []int `yaml:",flow"`
+		Inf     float64
+		Staff   map[string]string
+	}
+	type TOCV2 struct {
+		StatisticsEntries []MetadataEntryV2
+	}
+
+	toc := func() TOCV2 {
+		size := 2
+		toc := TOCV2{}
+		now := time.Date(2026, 3, 10, 1, 2, 3, 4, time.UTC)
+		for i := range size {
+			me := MetadataEntryV2{
+				Name:    fmt.Sprintf("Name %d", i),
+				Size:    int64(i),
+				Volume:  1.1 * float64(i),
+				Enabled: i%2 == 0,
+				Since:   now.Add(time.Duration(i) * time.Second),
+				Codes:   []int{i / 3, i / 2, i, i + 5},
+				Inf:     math.Inf(-1 + i%2),
+				Staff:   map[string]string{"admin": fmt.Sprintf("Boris %d", i), "chief": fmt.Sprintf("BulletDodger %d", i)},
+			}
+			toc.StatisticsEntries = append(toc.StatisticsEntries, me)
+		}
+		return toc
+	}()
+	expected := `
+statisticsentries:
+- name: Name 0
+  size: 0
+  volume: 0.0
+  enabled: true
+  since: "2026-03-10T01:02:03.000000004Z"
+  codes: [0, 0, 0, 5]
+  inf: -.inf
+  staff:
+    admin: Boris 0
+    chief: BulletDodger 0
+- name: Name 1
+  size: 1
+  volume: 1.1
+  enabled: false
+  since: "2026-03-10T01:02:04.000000004Z"
+  codes: [0, 0, 1, 6]
+  inf: .inf
+  staff:
+    admin: Boris 1
+    chief: BulletDodger 1
+`
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf)
+	if err := enc.Encode(toc); err != nil {
+		t.Fatalf("%+v", err)
+	}
+	got := "\n" + buf.String()
+	if expected != got {
+		t.Fatalf("diff: %s", cmp.Diff(expected, got))
+		// t.Fatalf("expect = [%s], actual = [%s]", expected, buf.String())
 	}
 }

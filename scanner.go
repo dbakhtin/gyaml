@@ -2,15 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !goexperiment.jsonv2
-
 package gyaml
 
-// JSON value parser state machine.
+// YAML value parser state machine.
 // Just about at the limit of what is reasonable to write by hand.
 // Some parts are a bit tedious, but overall it nicely factors out the
 // otherwise common code from the multiple scanning functions
-// in this package (Compact, Indent, checkValid, etc).
 //
 // This file starts with two simple examples using the scanner
 // before diving into the scanner itself.
@@ -22,24 +19,19 @@ import (
 	"unicode"
 )
 
-// Valid reports whether data is a valid JSON encoding.
+// Valid reports whether data is a valid YAML encoding.
 func Valid(data []byte) bool {
 	scan := newScanner()
 	defer freeScanner(scan)
 	return checkValid(data, scan) == nil
 }
 
-// TODO: remove after debug done
-var debu []byte
-
-// checkValid verifies that data is valid JSON-encoded data.
+// checkValid verifies that data is valid YAML-encoded data.
 // scan is passed in for use by checkValid to avoid an allocation.
 // checkValid returns nil or a SyntaxError.
 func checkValid(data []byte, s *scanner) error {
-	debu = []byte{}
 	s.reset()
 	for _, c := range data {
-		debu = append(debu, c)
 		s.bytes++
 		if s.step(s, c) == scanError {
 			return s.err
@@ -49,12 +41,11 @@ func checkValid(data []byte, s *scanner) error {
 	if s.eof() == scanError {
 		return s.err
 	}
-	_ = debu
 	return nil
 }
 
-// A SyntaxError is a description of a JSON syntax error.
-// [Unmarshal] will return a SyntaxError if the JSON can't be parsed.
+// A SyntaxError is a description of a YAML syntax error.
+// [Unmarshal] will return a SyntaxError if the YAML can't be parsed.
 type SyntaxError struct {
 	msg    string // description of error
 	Offset int64  // error occurred after reading Offset bytes
@@ -62,7 +53,7 @@ type SyntaxError struct {
 
 func (e *SyntaxError) Error() string { return fmt.Sprintf("%s, offset: %d", e.msg, e.Offset) }
 
-// A scanner is a JSON scanning state machine.
+// A scanner is a YAML scanning state machine.
 // Callers call scan.reset and then pass bytes in one at a time
 // by calling scan.step(&scan, c) for each byte.
 // The return value, referred to as an opcode, tells the
@@ -70,7 +61,7 @@ func (e *SyntaxError) Error() string { return fmt.Sprintf("%s, offset: %d", e.ms
 // and ending literals, objects, and arrays, so that the
 // caller can follow along if it wishes.
 // The return value scanEnd indicates that a single top-level
-// JSON value has been completed, *before* the byte that
+// YAML value has been completed, *before* the byte that
 // just got passed in.  (The indication must be delayed in order
 // to recognize the end of numbers: is 123 a whole value or
 // the beginning of 12345e+6?).
@@ -91,7 +82,7 @@ type scanner struct {
 	//calculated indent for the current state
 	idn int
 	//last meaningful (non-whitespace) value of byte input. Though this goes against strict state machine definition it
-	//may help in some border cases. For example to distinguish ':' in "a: b" (object key + value) and "a:b" (unquoted string)
+	//may help in some border cases. For example to distinguish ':' in "a: b" (object key + value) and "a:b" (a single unquoted string)
 	lastc byte
 	//sameLine is a flag, set to true after a block object key found and reset on new line
 	//the only purpose atm is to catch "a: b: c" and "a: - b" error cases
@@ -169,7 +160,6 @@ const (
 )
 
 // This limits the max nesting depth to prevent stack overflow.
-// This is permitted by https://tools.ietf.org/html/rfc7159#section-9
 const maxNestingDepth = 10000
 
 // reset prepares the scanner for use.
@@ -194,7 +184,8 @@ func (s *scanner) eof() int {
 	if s.endTop {
 		return scanEnd
 	}
-	//if by this time stack contains any flow state then no matching ] or } found, report error
+	//if by this time stack contains any flow state then no matching ] or } were found, report error
+	//unlike with full flow style or even json the stack can be non-empty at the end of the scan
 	for _, state := range s.states {
 		if state == parseFlowArrayValue || state == parseFlowObjectKey || state == parseFlowObjectValue {
 			s.err = &SyntaxError{"unexpected end of input", s.bytes}
@@ -231,11 +222,6 @@ func (s *scanner) pushState(c byte, newState int, successState int) int {
 			//if not then atleast +1 it
 			s.indents = append(s.indents, s.idn+1)
 		}
-		// if s.idn == 0 {
-		// 	s.indents = append(s.indents, s.idn+1) //multiline literals should have atleast 1 indent
-		// } else {
-		// 	s.indents = append(s.indents, s.idn)
-		// }
 	} else {
 		s.indents = append(s.indents, s.idn)
 	}
@@ -252,14 +238,12 @@ func (s *scanner) pushObjectState(c byte) int {
 	s.step = stateBeginValueOrEmpty
 	if n == 0 ||
 		s.states[n-1] == parseObjectValue && diff > 0 ||
-		// s.states[n-1] == parseObjectValue && diff >= 0 ||
 		s.states[n-1] == parseArrayValue && diff >= 0 {
 		s.sameLine = true
 		s.pushState(c, parseObjectValue, scanObjectValue)
 		if isLineBreak(c) {
 			return endLine(s, scanObjectKey)
 		}
-		// s.step = stateBeginValueOrEmpty
 		return scanObjectKey
 	}
 	//if we are here then input looks like "a: b:" which is invalid
@@ -401,7 +385,6 @@ func (s *scanner) isUnqDelim(c byte) bool {
 // unlike json need to track line breaks separately
 func isSpace(c byte) bool {
 	return c <= ' ' && (c == ' ' || c == '\t')
-	// return c == ' '
 }
 
 func isLineBreak(c byte) bool {
@@ -422,6 +405,7 @@ func indentDiff(s *scanner) int {
 }
 
 // stateBeginLine is the state after reading `\n` or at the beginning.
+// because YAML is indent dependent, perform some checks each time on a new line
 func stateBeginLine(s *scanner, c byte) int {
 	if isLineBreak(c) {
 		s.idn = 0
@@ -460,13 +444,12 @@ func stateBeginLine(s *scanner, c byte) int {
 				//either array or object value was empty and this is the beginning of another key
 				if c == '-' {
 					s.step = stateBeginArrayValueS
-					// return scanContinue
 					return scanBeginLiteral
 				}
 				s.toggleObjectState()
 			}
 		case parseArrayValue:
-			// 2 means possible "- " awaited
+			// 2 means possible "- "
 			switch {
 			case idiff < -2:
 				//pop & check if inside object. If true toggle object state (value -> key)
@@ -474,14 +457,8 @@ func stateBeginLine(s *scanner, c byte) int {
 				s.popState()
 				s.toggleObjectState()
 				return stateBeginLine(s, c)
-			// case idiff == -2 && c == '-':
-			// 	return stateBeginArrayValue(s, c)
-			// case idiff == -2 && c == '.' && s.idn == 0:
-			// 	s.step = stateEndYaml1
-			// 	return scanContinue
 			case idiff == -2:
 				if c == '-' {
-					// return stateBeginArrayValue(s, c)
 					s.step = stateBeginArrayValueS
 					return scanSkipSpace
 				} else if c == '.' && s.idn == 0 {
@@ -504,7 +481,6 @@ func stateBeginLine(s *scanner, c byte) int {
 			case idiff < 0:
 				s.popState()
 				s.toggleObjectState()
-				// return stateEndValue(s, c)
 				return stateBeginLine(s, c)
 			default:
 				s.step = stateInMultiline
@@ -532,12 +508,10 @@ func stateBeginValueOrEmpty(s *scanner, c byte) int {
 		return endLine(s, scanSkipSpace)
 	}
 	//end of flow array or delimiter
-	// if c == ':' || c == ']' || c == ',' {
 	if c == ']' || c == ',' {
 		return stateEndValue(s, c)
 	}
 	if c == '}' {
-		//TODO: just call stateEndValue and process this check there in a FlowObjectKey case. This means value is empty
 		n := len(s.states)
 		if n == 0 || !s.inFlowObject() {
 			return s.error(c, "while not in object")
@@ -573,7 +547,6 @@ func stateBeginValue(s *scanner, c byte) int {
 	case '-':
 		s.step = stateHyphen
 		return scanBeginLiteral
-		//TODO: move '~' to its own state?
 	case '~': //null
 		s.step = stateInStringUnq
 		return scanBeginLiteral
@@ -617,30 +590,15 @@ func stateEndValue(s *scanner, c byte) int {
 		s.step = stateEndValue
 		return scanSkipSpace
 	}
-	//TODO: remove next if !!!!!!!!!
-	//skip spaces after the quoted string end, unquoted is fine
-	// if (s.lastc == '"' || s.lastc == '\'' || s.lastc == ']') && isSpace(c) {
-	// 	s.step = stateEndValue
-	// 	return scanSkipSpace
-	// }
 	if c == '#' {
 		s.step = stateBeginComment
 		return scanSkipSpace
 	}
 	//for quoted keys need to check here... for unquoted & numbers this is done in a stateKeyOrUnq
 	if c == ':' {
-		//if state is pushed successfully return, because it is already parseObjectValue
-		// if code := s.pushObjectState(c); code != scanContinue {
-		// 	return code
-		// }
 		return s.pushObjectState(c)
 	}
 	n := len(s.states)
-	// if c == ':' || s.lastc == ':' && (isSpace(c) || isLineBreak(c)) {
-	// 	if code := s.pushObjectState(c); code != scanContinue {
-	// 		return code
-	// 	}
-	// }
 	if n == 0 {
 		// Completed top-level before the current byte.
 		s.step = stateEndTop
@@ -748,10 +706,8 @@ func stateEndYaml(s *scanner, c byte) int {
 
 // stateKeyOrUnq is the state after reading ':' in an unquoted string
 func stateKeyOrUnq(s *scanner, c byte) int {
-	// if isSpace(c) || s.lastc == ':' && isLineBreak(c) {
 	if isSpace(c) || s.isUnqDelim(c) {
 		return s.pushObjectState(c)
-		// return stateEndValue(s, c)
 	}
 	s.step = stateInStringUnq
 	return stateInStringUnq(s, c)
@@ -786,8 +742,6 @@ func stateEmptyLine(s *scanner, c byte) int {
 		return scanContinue
 	}
 	if isLineBreak(c) {
-		// s.step = stateBeginLine
-		// return scanContinue
 		return endLine(s, scanContinue) //not sure about code
 	}
 	if c == '#' {
@@ -813,8 +767,6 @@ func stateBeginMultiline(s *scanner, c byte) int {
 		return scanContinue //or scanSkipSpace?
 	}
 	if isLineBreak(c) {
-		// s.step = stateBeginLine
-		// return scanContinue
 		return endLine(s, scanContinue) //not sure about code
 	}
 	return s.error(c, "at the beginning of multiline string")
@@ -949,7 +901,6 @@ func stateInAlias(s *scanner, c byte) int {
 		return scanContinue
 	}
 	if isSpace(c) {
-		// s.step = stateBeginValueOrEmpty
 		s.step = stateEndValue
 		return scanSkipSpace
 	}
@@ -991,7 +942,6 @@ func stateInStringEscx(s *scanner, c byte) int {
 		s.step = stateInStringEscx1
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\x hexadecimal character escape")
 }
 
@@ -1001,7 +951,6 @@ func stateInStringEscx1(s *scanner, c byte) int {
 		s.step = stateInString
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\x hexadecimal character escape")
 }
 
@@ -1011,7 +960,6 @@ func stateInStringEscu(s *scanner, c byte) int {
 		s.step = stateInStringEscu1
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
@@ -1021,7 +969,6 @@ func stateInStringEscu1(s *scanner, c byte) int {
 		s.step = stateInStringEscu12
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
@@ -1031,7 +978,6 @@ func stateInStringEscu12(s *scanner, c byte) int {
 		s.step = stateInStringEscu123
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
@@ -1041,7 +987,6 @@ func stateInStringEscu123(s *scanner, c byte) int {
 		s.step = stateInString
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\u hexadecimal character escape")
 }
 
@@ -1051,7 +996,6 @@ func stateInStringEscU(s *scanner, c byte) int {
 		s.step = stateInStringEscU1
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1061,7 +1005,6 @@ func stateInStringEscU1(s *scanner, c byte) int {
 		s.step = stateInStringEscU12
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1071,7 +1014,6 @@ func stateInStringEscU12(s *scanner, c byte) int {
 		s.step = stateInStringEscU123
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1081,7 +1023,6 @@ func stateInStringEscU123(s *scanner, c byte) int {
 		s.step = stateInStringEscU1234 //sigh
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1091,7 +1032,6 @@ func stateInStringEscU1234(s *scanner, c byte) int {
 		s.step = stateInStringEscU12345
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1101,7 +1041,6 @@ func stateInStringEscU12345(s *scanner, c byte) int {
 		s.step = stateInStringEscU123456
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1111,7 +1050,6 @@ func stateInStringEscU123456(s *scanner, c byte) int {
 		s.step = stateInStringEscU1234567
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
@@ -1121,7 +1059,6 @@ func stateInStringEscU1234567(s *scanner, c byte) int {
 		s.step = stateInString
 		return scanContinue
 	}
-	// numbers
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 

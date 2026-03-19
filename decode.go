@@ -3,9 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Represents YAML data structure using native Go types: booleans, floats,
-// strings, arrays, and maps.
-
-//go:build !goexperiment.yamlv2
+// strings, arrays, structs and maps.
 
 package gyaml
 
@@ -22,7 +20,6 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
-	_ "unsafe" // for linkname
 )
 
 // Unmarshal decodes the first document found within the in byte slice
@@ -48,12 +45,6 @@ import (
 // See the documentation of Marshal for the format of tags and a list of
 // supported tag options.
 func Unmarshal(data []byte, v any) error {
-	return UnmarshalWithOptions(data, v, DefaultDecoderOptions())
-}
-
-// UnmarshalWithOptions decodes with DecodeOptions the first document found within the in byte slice
-// and assigns decoded values into the out value.
-func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	// Check for well-formedness.
 	// Avoids filling out half a data structure
 	// before discovering a YAML syntax error.
@@ -75,7 +66,7 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		}
 	}
 
-	//if there is an end document separator "..." ignore data after it
+	//if there is an end document separator "..." ignore data following it
 	end := documentEndIndex(data)
 	if end > -1 {
 		data = data[:end]
@@ -117,23 +108,9 @@ type UnmarshalTypeError struct {
 
 func (e *UnmarshalTypeError) Error() string {
 	if e.Struct != "" || e.Field != "" {
-		return "yaml: cannot unmarshal " + e.Value + " into Go struct field " + e.Struct + "." + e.Field + " of type " + e.Type.String()
+		return "yaml: cannot unmarshal " + e.Value + " into Go struct field " + e.Struct + "." + e.Field + " of type " + e.Type.String() + ", offset: " + strconv.Itoa(int(e.Offset))
 	}
-	return "yaml: cannot unmarshal " + e.Value + " into Go value of type " + e.Type.String()
-}
-
-// An UnmarshalFieldError describes a YAML object key that
-// led to an unexported (and therefore unwritable) struct field.
-//
-// Deprecated: No longer used; kept for compatibility.
-type UnmarshalFieldError struct {
-	Key   string
-	Type  reflect.Type
-	Field reflect.StructField
-}
-
-func (e *UnmarshalFieldError) Error() string {
-	return "yaml: cannot unmarshal object key " + strconv.Quote(e.Key) + " into unexported field " + e.Field.Name + " of type " + e.Type.String()
+	return "yaml: cannot unmarshal " + e.Value + " into Go value of type " + e.Type.String() + ", offset: " + strconv.Itoa(int(e.Offset))
 }
 
 // An InvalidUnmarshalError describes an invalid argument passed to [Unmarshal].
@@ -189,7 +166,6 @@ type decodeState struct {
 	scan                  scanner
 	errorContext          *errorContext
 	savedError            error
-	useNumber             bool
 	disallowUnknownFields bool
 
 	// anchors map[string]uintptr
@@ -200,11 +176,6 @@ type decodeState struct {
 func (d *decodeState) readIndex() int {
 	return d.off - 1
 }
-
-// phasePanicMsg is used as a panic message when we end up with something that
-// shouldn't happen. It can indicate a bug in the YAML decoder, or that
-// something is editing the data slice while the decoder executes.
-const phasePanicMsg = "YAML decoder out of sync - data changing underfoot?"
 
 func (d *decodeState) init(data []byte) *decodeState {
 	d.data = data
@@ -293,25 +264,6 @@ func (d *decodeState) scanWhile(op int) {
 	d.opcode = d.scan.eof()
 }
 
-// scanWhile processes bytes in d.data[d.off:] until it
-// receives a scan code not equal to op while preserving same depth
-func (d *decodeState) scanWhileDepth(op int, depth int) {
-	s, data, i := &d.scan, d.data, d.off
-	for i < len(data) {
-		newOp := s.step(s, data[i])
-		s.lastInput(data[i])
-		i++
-		if newOp != op || len(s.states) != depth {
-			d.opcode = newOp
-			d.off = i
-			return
-		}
-	}
-
-	d.off = len(data) + 1 // mark processed EOF with len+1
-	d.opcode = d.scan.eof()
-}
-
 // quickScan is checking the literal value if its a block object key / array element or an ordinary string
 // if the literal value is an anchor (starting with '&') it advances the scanner to the next value and returns anchor
 // name as second value
@@ -327,19 +279,9 @@ Switch:
 		scopy.step = stateInString
 		for ; i < len(data); i++ {
 			if scopy.step(&scopy, data[i]) != scanContinue {
-				// i++ // tokenize the closing quote too
 				break Switch
 			}
 		}
-		// for ; i < len(data); i++ {
-		// 	switch data[i] {
-		// 	case '\\':
-		// 		i++ // escaped char
-		// 	case '"':
-		// 		i++ // tokenize the closing quote too
-		// 		break Switch
-		// 	}
-		// }
 	case '\'':
 		//skip single quoted string too
 		scopy := d.scan
@@ -347,7 +289,6 @@ Switch:
 		scopy.step = stateInStringSq
 		for ; i < len(data); i++ {
 			if scopy.step(&scopy, data[i]) != scanContinue {
-				// i++ // tokenize the closing quote too
 				break Switch
 			}
 		}
@@ -374,7 +315,7 @@ Switch:
 		if d.scan.isUnqDelim(data[i]) {
 			break
 		}
-		//unfortunately have to duplicate some scanner logic here
+		//have to duplicate some scanner logic here
 		//basically ": " means object key, but.. when key is a quoted string u can skip that whitespace check (atleast in
 		//flow mode for sure), but we let it be for block mode also...
 		if data[i] == ':' && (i+1 == len(data) || isWhiteSpace(data[i+1]) || d.scan.lastc == '"' || d.scan.lastc == '\'') {
@@ -511,7 +452,7 @@ func (d *decodeState) value(v reflect.Value) error {
 		d.rescanLiteral()
 
 		if v.IsValid() {
-			if err := d.storeLiteral(d.data[start:d.readIndex()], v, false); err != nil {
+			if err := d.storeLiteral(d.data[start:d.readIndex()], v); err != nil {
 				return err
 			}
 		}
@@ -598,7 +539,7 @@ func indirect(v reflect.Value, decodingNull bool) (Unmarshaler, encoding.TextUnm
 }
 
 // array consumes an array from d.data[d.off-1:], decoding into v.
-// The first byte of the array ('[') has been read already.
+// The first byte of the array ('[') (if flow style) has been read already.
 func (d *decodeState) array(v reflect.Value) error {
 	// Check for unmarshaler.
 	u, ut, pv := indirect(v, false)
@@ -639,18 +580,16 @@ func (d *decodeState) array(v reflect.Value) error {
 	i := 0
 	depth := len(d.scan.states)
 	if !d.scan.inFlowArray() {
-		//block array state is pushed to stack only after first "- " has been parsed
+		//block array state is pushed to stack only after first "- " has been parsed, so inc depth preemptively
 		depth++
 	}
 	for {
 		//for second value and on in a block array the "- " can have a scanBeginLiteral code sometimes, for ex. after
-		//parsing a nested multiline literal, then recheck
+		//parsing a nested multiline literal, check this
 		if d.scan.inBlockArray() && d.opcode == scanBeginLiteral && d.data[d.readIndex()] == '-' {
 			d.opcode, _ = d.quickScan()
 		}
 		if d.opcode == scanBeginArray || d.opcode == scanArrayValue || d.scan.inFlowArray() {
-			// d.scanWhileDepth(scanSkipSpace, depth) //an attempt to parse multidim block arrays "- - a" all good but fails
-			// at some point, fix later. To overcome this use mixed "- [a, b]" style or full flow [[a,b],...]
 			d.scanWhile(scanSkipSpace)
 		}
 		if d.opcode == scanEndArray || d.opcode == scanEnd || len(d.scan.states) < depth {
@@ -707,7 +646,7 @@ var textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
 var unmarshalerType = reflect.TypeFor[Unmarshaler]()
 
 // object consumes an object from d.data[d.off-1:], decoding into v.
-// The first byte ('{') of the object has been read already.
+// The first byte ('{') (if flow style) of the object has been read already.
 func (d *decodeState) object(v reflect.Value) error {
 	// Check for unmarshaler.
 	u, ut, pv := indirect(v, false)
@@ -888,13 +827,13 @@ func (d *decodeState) object(v reflect.Value) error {
 				}
 			} else if reflect.PointerTo(kt).Implements(textUnmarshalerType) {
 				kv = reflect.New(kt)
-				if err := d.storeLiteral(item, kv, false); err != nil {
+				if err := d.storeLiteral(item, kv); err != nil {
 					return err
 				}
 				kv = kv.Elem()
 			} else if reflect.PointerTo(kt).Implements(unmarshalerType) {
 				kv = reflect.New(kt)
-				if err := d.storeLiteral(item, kv, false); err != nil {
+				if err := d.storeLiteral(item, kv); err != nil {
 					return err
 				}
 				kv = kv.Elem()
@@ -927,7 +866,7 @@ func (d *decodeState) object(v reflect.Value) error {
 					kv = reflect.New(kt).Elem()
 					kv.SetUint(n)
 				case reflect.Float32, reflect.Float64:
-					n, err := strconv.ParseFloat(s, 64)
+					n, err := convertFloat(s, 64)
 					if err != nil || kt.OverflowFloat(n) {
 						d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: kt, Offset: int64(start + 1)})
 						break
@@ -978,7 +917,7 @@ func (d *decodeState) object(v reflect.Value) error {
 	return nil
 }
 
-// convertNumber converts the number literal s to a int64 or float64 if was an erroror a Number
+// convertNumber converts the number literal s to a int64 or float64
 // also checks for reserved words .inf, .nan
 func (d *decodeState) convertNumber(s string) (any, error) {
 	//first digit index
@@ -987,21 +926,7 @@ func (d *decodeState) convertNumber(s string) (any, error) {
 		i++
 	}
 	if i < len(s) && s[i] == '.' {
-		if slices.Contains(reservedInfKeywords, s[i:]) {
-			if s[0] == '-' {
-				return math.Inf(-1), nil
-			} else {
-				return math.Inf(0), nil
-			}
-		}
-		if slices.Contains(reservedNanKeywords, s[i:]) {
-			return math.NaN(), nil
-		}
-		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return nil, &UnmarshalTypeError{Value: "number " + s, Type: reflect.TypeFor[float64](), Offset: int64(d.off)}
-		}
-		return f, nil
+		return convertFloat(s, 64)
 	}
 
 	base := numberBase([]byte(s))
@@ -1016,6 +941,7 @@ func (d *decodeState) convertNumber(s string) (any, error) {
 	return f, nil
 }
 
+// isTime checks if v is a time.Time
 func isTime(v reflect.Value) bool {
 	tt := reflect.TypeFor[time.Time]()
 	if v.Kind() == reflect.Pointer {
@@ -1023,11 +949,14 @@ func isTime(v reflect.Value) bool {
 	}
 	return v.Kind() == reflect.Struct && v.Type() == tt
 }
+
+// isDuration checks if v is a time.Duration
 func isDuration(v reflect.Value) bool {
 	return v.Kind() == reflect.Int64 && v.Type() == reflect.TypeFor[time.Duration]()
 }
 
-func (d *decodeState) storeExplicit(item []byte, v reflect.Value, fromQuoted bool) error {
+// storeExplicit stores item value in v if explicit yaml tag is specified: !!float, !!str, etc
+func (d *decodeState) storeExplicit(item []byte, v reflect.Value) error {
 	ty, data, found := bytes.Cut(item, []byte{' '})
 	if !found || !bytes.HasPrefix(ty, []byte{'!', '!'}) {
 		d.saveError(&UnmarshalTypeError{Value: string(item[:min(len(item), 5)]), Type: v.Type(), Offset: int64(d.readIndex())})
@@ -1044,18 +973,18 @@ func (d *decodeState) storeExplicit(item []byte, v reflect.Value, fromQuoted boo
 	}
 	switch sty := string(ty); sty {
 	case "str":
-		return d.storeString(data, v, fromQuoted)
+		return d.storeString(data, v)
 	case "int":
-		return d.storeInt(data, v, fromQuoted)
+		return d.storeInt(data, v)
 	case "float":
-		return d.storeFloat(data, v, fromQuoted)
+		return d.storeFloat(data, v)
 	case "bool":
 		if slices.Contains(reservedBoolKeywords, string(data)) {
-			return d.storeBool(data, v, fromQuoted)
+			return d.storeBool(data, v)
 		}
 		d.saveError(fmt.Errorf("yaml: unsupported bool value with explicit type %q", item))
 	case "null":
-		return d.storeNull(data, v, fromQuoted)
+		return d.storeNull(data, v)
 	// case "set":
 	// case "map", "omap":
 	// case "seq":
@@ -1090,12 +1019,9 @@ func (d *decodeState) storeExplicit(item []byte, v reflect.Value, fromQuoted boo
 // }
 
 // storeInt stores int value when explicit !!int type is specified for value
-func (d *decodeState) storeInt(item []byte, v reflect.Value, fromQuoted bool) error {
+func (d *decodeState) storeInt(item []byte, v reflect.Value) error {
 	switch v.Kind() {
 	default:
-		if fromQuoted {
-			return fmt.Errorf("yaml: invalid use of string struct tag, trying to unmarshal %q into %v", item, v.Type())
-		}
 		d.saveError(&UnmarshalTypeError{Value: "integer", Type: v.Type(), Offset: int64(d.readIndex())})
 
 	case reflect.Interface:
@@ -1131,18 +1057,16 @@ func (d *decodeState) storeInt(item []byte, v reflect.Value, fromQuoted bool) er
 }
 
 // storeFloat stores float value when explicit !!float type is specified for value
-func (d *decodeState) storeFloat(item []byte, v reflect.Value, fromQuoted bool) error {
+func (d *decodeState) storeFloat(item []byte, v reflect.Value) error {
+	s := string(item)
 	switch v.Kind() {
 	default:
-		if fromQuoted {
-			return fmt.Errorf("yaml: invalid use of string struct tag, trying to unmarshal %q into %v", item, v.Type())
-		}
 		d.saveError(&UnmarshalTypeError{Value: "float", Type: v.Type(), Offset: int64(d.readIndex())})
 
 	case reflect.Interface:
-		n, err := strconv.ParseFloat(string(item), 64)
+		n, err := convertFloat(s, 64)
 		if err != nil {
-			d.saveError(&UnmarshalTypeError{Value: "float " + string(item), Type: v.Type(), Offset: int64(d.readIndex())})
+			d.saveError(&UnmarshalTypeError{Value: "float " + s, Type: v.Type(), Offset: int64(d.readIndex())})
 			break
 		}
 		if v.NumMethod() != 0 {
@@ -1152,13 +1076,12 @@ func (d *decodeState) storeFloat(item []byte, v reflect.Value, fromQuoted bool) 
 		v.Set(reflect.ValueOf(n))
 
 	case reflect.Float32, reflect.Float64:
-		n, err := strconv.ParseFloat(string(item), v.Type().Bits())
+		n, err := convertFloat(s, v.Type().Bits())
 		if err != nil || v.OverflowFloat(n) {
-			d.saveError(&UnmarshalTypeError{Value: "float " + string(item), Type: v.Type(), Offset: int64(d.readIndex())})
+			d.saveError(&UnmarshalTypeError{Value: "float " + s, Type: v.Type(), Offset: int64(d.readIndex())})
 			break
 		}
 		v.SetFloat(n)
-
 	}
 
 	return nil
@@ -1203,17 +1126,13 @@ func (d *decodeState) storeDuration(item []byte, v reflect.Value) error {
 	return nil
 }
 
-func (d *decodeState) storeBool(item []byte, v reflect.Value, fromQuoted bool) error {
+func (d *decodeState) storeBool(item []byte, v reflect.Value) error {
 	c := item[0]
 	s := string(item)
 	value := c == 't' || c == 'T'
 	switch v.Kind() {
 	default:
-		if fromQuoted {
-			d.saveError(fmt.Errorf("yaml: invalid use of string struct tag, trying to unmarshal %q into %v", item, v.Type()))
-		} else {
-			d.saveError(&UnmarshalTypeError{Value: "bool", Type: v.Type(), Offset: int64(d.readIndex())})
-		}
+		d.saveError(&UnmarshalTypeError{Value: "bool", Type: v.Type(), Offset: int64(d.readIndex())})
 	case reflect.String:
 		v.SetString(s)
 	case reflect.Bool:
@@ -1228,14 +1147,10 @@ func (d *decodeState) storeBool(item []byte, v reflect.Value, fromQuoted bool) e
 	return nil
 }
 
-func (d *decodeState) storeString(item []byte, v reflect.Value, fromQuoted bool) error {
+func (d *decodeState) storeString(item []byte, v reflect.Value) error {
 	item, ok := unquoteBytes(item)
 	if !ok {
-		if fromQuoted {
-			d.saveError(fmt.Errorf("yaml: invalid use of string struct tag, trying to unmarshal %q into %v", item, v.Type()))
-		} else {
-			d.saveError(&UnmarshalTypeError{Value: "string", Type: v.Type(), Offset: int64(d.readIndex())})
-		}
+		d.saveError(&UnmarshalTypeError{Value: "string", Type: v.Type(), Offset: int64(d.readIndex())})
 		return nil
 	}
 	s := string(item)
@@ -1254,7 +1169,7 @@ func (d *decodeState) storeString(item []byte, v reflect.Value, fromQuoted bool)
 	return nil
 }
 
-func (d *decodeState) storeNull(_ []byte, v reflect.Value, _ bool) error {
+func (d *decodeState) storeNull(_ []byte, v reflect.Value) error {
 	switch v.Kind() {
 	case reflect.Interface, reflect.Pointer, reflect.Map, reflect.Slice:
 		v.SetZero()
@@ -1263,8 +1178,7 @@ func (d *decodeState) storeNull(_ []byte, v reflect.Value, _ bool) error {
 	return nil
 }
 
-// keyInterface tries to parse item value when no type is specified (mainly when decoding keys for map[any]...)
-// unlike valueInterface func it does not read from input buffer but operates on the given item
+// keyInterface parses item value into key value for a map[any]
 func (d *decodeState) keyInterface(item []byte) reflect.Value {
 	if len(item) == 0 {
 		return reflect.ValueOf(nil)
@@ -1302,22 +1216,20 @@ func numberBase(item []byte) int {
 }
 
 // storeNumber is a generic number parser used by storeLiteral
-func (d *decodeState) storeNumber(item []byte, v reflect.Value, fromQuoted bool) error {
+func (d *decodeState) storeNumber(item []byte, v reflect.Value) error {
 	//already unquoted
 	item = bytes.TrimRight(item, "\t ") // welcome to yaml, spaces everywhere
+	s := string(item)
 	switch v.Kind() {
 	default:
-		if fromQuoted {
-			return fmt.Errorf("yaml: invalid use of string struct tag, trying to unmarshal %q into %v", item, v.Type())
-		}
 		d.saveError(&UnmarshalTypeError{Value: "number", Type: v.Type(), Offset: int64(d.readIndex())})
 	case reflect.String:
-		v.SetString(string(item))
+		v.SetString(s)
 
 	case reflect.Interface:
-		n, err := d.convertNumber(string(item))
+		n, err := d.convertNumber(s)
 		if err != nil {
-			v.Set(reflect.ValueOf(string(item)))
+			v.Set(reflect.ValueOf(s))
 			break
 		}
 		if v.NumMethod() != 0 {
@@ -1328,31 +1240,52 @@ func (d *decodeState) storeNumber(item []byte, v reflect.Value, fromQuoted bool)
 
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		base := numberBase(item)
-		n, err := strconv.ParseInt(string(item), base, 64)
+		n, err := strconv.ParseInt(s, base, 64)
 		if err != nil || v.OverflowInt(n) {
-			d.saveError(&UnmarshalTypeError{Value: "number " + string(item), Type: v.Type(), Offset: int64(d.readIndex())})
+			d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
 			break
 		}
 		v.SetInt(n)
 
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		base := numberBase(item)
-		n, err := strconv.ParseUint(string(item), base, 64)
+		n, err := strconv.ParseUint(s, base, 64)
 		if err != nil || v.OverflowUint(n) {
-			d.saveError(&UnmarshalTypeError{Value: "number " + string(item), Type: v.Type(), Offset: int64(d.readIndex())})
+			d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
 			break
 		}
 		v.SetUint(n)
 
 	case reflect.Float32, reflect.Float64:
-		n, err := strconv.ParseFloat(string(item), v.Type().Bits())
+		n, err := convertFloat(s, v.Type().Bits())
 		if err != nil || v.OverflowFloat(n) {
-			d.saveError(&UnmarshalTypeError{Value: "number " + string(item), Type: v.Type(), Offset: int64(d.readIndex())})
+			d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
 			break
 		}
 		v.SetFloat(n)
 	}
 	return nil
+}
+
+// convertFloat converts string s to float, checking .inf/.nan reserved words
+func convertFloat(s string, bitSize int) (float64, error) {
+	i := 0
+	if s[0] == '-' || s[0] == '+' {
+		i++
+	}
+	if i < len(s) && s[i] == '.' {
+		if slices.Contains(reservedInfKeywords, s[i:]) {
+			if s[0] == '-' {
+				return math.Inf(-1), nil
+			} else {
+				return math.Inf(0), nil
+			}
+		}
+		if slices.Contains(reservedNanKeywords, s[i:]) {
+			return math.NaN(), nil
+		}
+	}
+	return strconv.ParseFloat(s, bitSize)
 }
 
 // convertInterface tries to convert v of kind reflect.Interface or []reflect.Interface/map to t
@@ -1448,17 +1381,9 @@ func (d *decodeState) convertInterface(v reflect.Value, t reflect.Type) (reflect
 }
 
 // storeLiteral decodes a literal stored in item into v.
-//
-// fromQuoted indicates whether this literal came from unwrapping a
-// string from the ",string" struct tag option. this is used only to
-// produce more helpful error messages.
-// TODO: remove fromQuoted? It's not json where it is strictly defined
-func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool) error {
-	// Check for unmarshaler?
+func (d *decodeState) storeLiteral(item []byte, v reflect.Value) error {
 	if len(item) == 0 {
-		// Empty string given.
 		v.SetZero()
-		// d.saveError(fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
 		return nil
 	}
 
@@ -1485,7 +1410,7 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 		return nil
 	}
 	if item[0] == '!' {
-		return d.storeExplicit(item, v, fromQuoted)
+		return d.storeExplicit(item, v)
 	}
 
 	if isDuration(v) {
@@ -1498,10 +1423,6 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 	}
 	if ut != nil {
 		if item[0] != '"' && item[0] != '\'' {
-			if fromQuoted {
-				d.saveError(fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
-				return nil
-			}
 			if isTime(v) {
 				return d.storeTime(item, v)
 			}
@@ -1510,9 +1431,6 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 		}
 		s, ok := unquoteBytes(item)
 		if !ok {
-			if fromQuoted {
-				return fmt.Errorf("yaml: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
-			}
 			return &UnmarshalError{Offset: d.readIndex(), Type: v.Type(), Message: "unmatched quotes"}
 		}
 		return ut.UnmarshalText(s)
@@ -1522,15 +1440,15 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 
 	switch c := item[0]; c {
 	case '"', '\'': // string
-		return d.storeString(item, v, fromQuoted)
+		return d.storeString(item, v)
 
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '.':
-		return d.storeNumber(item, v, fromQuoted)
+		return d.storeNumber(item, v)
 
 	default:
 		//is null
 		if isNull {
-			return d.storeNull(item, v, fromQuoted)
+			return d.storeNull(item, v)
 		}
 		//unquoted string
 		item = bytes.TrimRight(item, " ")
@@ -1540,7 +1458,7 @@ func (d *decodeState) storeLiteral(item []byte, v reflect.Value, fromQuoted bool
 		s := string(item)
 		//if bool, only yaml 1.2 compliant values are checked
 		if (c == 't' || c == 'T' || c == 'f' || c == 'F') && slices.Contains(reservedBoolKeywords, s) {
-			return d.storeBool(item, v, fromQuoted)
+			return d.storeBool(item, v)
 		}
 
 		switch v.Kind() {
@@ -1701,7 +1619,7 @@ func (d *decodeState) arrayInterface() ([]any, error) {
 	var v = make([]any, 0)
 	depth := len(d.scan.states)
 	if !d.scan.inFlowArray() {
-		//block array state is pushed to stack only after first "- " has been parsed
+		//block array state is pushed to stack only after first "- " has been parsed, so inc preemptively
 		depth++
 	}
 	for {
@@ -1729,7 +1647,7 @@ func (d *decodeState) arrayInterface() ([]any, error) {
 }
 
 // objectInterface is like object but returns map[string]any.
-// TODO: probably should upgrade it to map[any]any at some point for more flexibility
+// TODO: probably should upgrade it to map[any]any at some point for usability
 func (d *decodeState) objectInterface() (map[string]any, error) {
 	m := make(map[string]any)
 	for {
@@ -1963,19 +1881,8 @@ func unquote(s []byte) (t string, ok bool) {
 	return
 }
 
-// unquoteBytes should be an internal detail,
-// but widely used packages access it using linkname.
-// Notable members of the hall of shame include:
-//   - github.com/bytedance/sonic
-//
-// Do not remove or change the type signature.
-// See go.dev/issue/67401.
-//
-// +++ now also checks if single-quoted
-// +++ if already unquoted, returns input value with trimmed spaces
-// +++ added more escape sequences for a double-quoted string
-//
-//go:linkname unquoteBytes
+// unquoteBytes unquotes a byte slice.
+// If already unquoted, returns original value with trimmed spaces
 func unquoteBytes(s []byte) (t []byte, ok bool) {
 	switch len(s) {
 	case 0:

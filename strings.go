@@ -78,6 +78,7 @@ func isReserved(s string) bool {
 	return ok
 }
 
+// isNeedQuoted checks if string value must be wrapped in quotes to prevent ambiguity
 func isNeedQuoted(value string) bool {
 	if value == "" || value == "-" {
 		return true

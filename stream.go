@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !goexperiment.jsonv2
-
 package gyaml
 
 import (
@@ -33,10 +31,6 @@ type Decoder struct {
 func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{r: r}
 }
-
-// UseNumber causes the Decoder to unmarshal a number into an
-// interface value as a [Number] instead of as a float64.
-func (dec *Decoder) UseNumber() { dec.d.useNumber = true }
 
 // DisallowUnknownFields causes the Decoder to return an error when the destination
 // is a struct and the input contains object keys which do not match any
@@ -106,7 +100,6 @@ func (dec *Decoder) Decode(v any) error {
 	}
 	buf := dec.buf[dec.scanp : dec.scanp+n]
 	//Look for new document separator "---" starting from a new line or buffer beginning
-	//TODO: optimize, may be use bytes.Cut?
 	start := documentStartIndex(buf)
 	if start > 0 {
 		dec.scan.reset()
@@ -125,7 +118,6 @@ func (dec *Decoder) Decode(v any) error {
 		buf = buf[:end]
 		n = end + 4 //skip "\n..." bytes
 	}
-	// dec.d.init(dec.buf[dec.scanp : dec.scanp+n])
 	dec.d.init(buf)
 	dec.scanp += n
 
@@ -235,6 +227,7 @@ func (dec *Decoder) refill() error {
 	return err
 }
 
+// nonSpace checks is a byte slice contains a non-space character
 func nonSpace(b []byte) bool {
 	for _, c := range b {
 		if !isSpace(c) {

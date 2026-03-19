@@ -2,44 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package gyaml implements encoding and decoding of YAML as defined in RFC 7159.
+// Package gyaml implements encoding and decoding of YAML.
 // The mapping between YAML and Go values is described in the documentation for
 // the Marshal and Unmarshal functions.
-//
-// See "YAML and Go" for an introduction to this package:
-// https://golang.org/doc/articles/yaml_and_go.html
-//
-// # Security Considerations
-//
-// The YAML standard (RFC 7159) is lax in its definition of a number of parser
-// behaviors. As such, many YAML parsers behave differently in various
-// scenarios. These differences in parsers mean that systems that use multiple
-// independent YAML parser implementations may parse the same YAML object in
-// differing ways.
-//
-// Systems that rely on a YAML object being parsed consistently for security
-// purposes should be careful to understand the behaviors of this parser, as
-// well as how these behaviors may cause interoperability issues with other
-// parser implementations.
-//
-// Due to the Go Backwards Compatibility promise (https://go.dev/doc/go1compat)
-// there are a number of behaviors this package exhibits that may cause
-// interopability issues, but cannot be changed. In particular the following
-// parsing behaviors may cause issues:
-//
-//   - If a YAML object contains duplicate keys, keys are processed in the order
-//     they are observed, meaning later values will replace or be merged into
-//     prior values, depending on the field type (in particular maps and structs
-//     will have values merged, while other types have values replaced).
-//   - When parsing a YAML object into a Go struct, keys are considered in a
-//     case-insensitive fashion.
-//   - When parsing a YAML object into a Go struct, unknown keys in the YAML
-//     object are ignored (unless a [Decoder] is used and
-//     [Decoder.DisallowUnknownFields] has been called).
-//   - Invalid UTF-8 bytes in YAML strings are replaced by the Unicode
-//     replacement character.
-//   - Large YAML number integers will lose precision when unmarshaled into
-//     floating-point types.
 package gyaml
 
 import (
@@ -55,7 +20,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	_ "unsafe" // for linkname
 )
 
 // Marshal returns the YAML encoding of v.
@@ -75,25 +39,19 @@ import (
 // Boolean values encode as YAML booleans.
 //
 // Floating point, integer, and [Number] values encode as YAML numbers.
-// NaN and +/-Inf values will return an [UnsupportedValueError].
 //
-// String values encode as YAML strings coerced to valid UTF-8,
-// replacing invalid bytes with the Unicode replacement rune.
-// So that the YAML will be safe to embed inside HTML <script> tags,
-// the string is encoded using [HTMLEscape],
-// which replaces "<", ">", "&", U+2028, and U+2029 are escaped
-// to "\u003c","\u003e", "\u0026", "\u2028", and "\u2029".
-// This replacement can be disabled when using an [Encoder],
-// by calling [Encoder.SetEscapeHTML](false).
+// String values encode as YAML unquoted strings,
+// unless it passes the IsNeedQuoted function check for ambiguities:
+// if it consists of a pure number, time.Time, boolean value, etc.
 //
-// Array and slice values encode as YAML arrays, except that
-// []byte encodes as a base64-encoded string, and a nil slice
-// encodes as the null YAML value.
+// Array and slice values encode as YAML sequences,
+// by default using a block style. For flow style you need to set a "flow" tag or
+// use a global flow style for encoder.
 //
-// Struct values encode as YAML objects.
+// Struct values encode as YAML objects. Again optional flow style is supported.
 // Each exported struct field becomes a member of the object, using the
-// field name as the object key, unless the field is omitted for one of the
-// reasons given below.
+// lowercased field name as the object key,
+// unless the field is omitted for one of the reasons given below.
 //
 // The encoding of each struct field can be customized by the format string
 // stored under the "yaml" key in the struct field's tag.
@@ -141,17 +99,6 @@ import (
 // If both "omitempty" and "omitzero" are specified, the field will be omitted
 // if the value is either empty or zero (or both).
 //
-// The "string" option signals that a field is stored as YAML inside a
-// YAML-encoded string. It applies only to fields of string, floating point,
-// integer, or boolean types. This extra level of encoding is sometimes used
-// when communicating with JavaScript programs:
-//
-//	Int64String int64 `yaml:",string"`
-//
-// The key name will be used if it's a non-empty string consisting of
-// only Unicode letters, digits, and ASCII punctuation except quotation
-// marks, backslash, and comma.
-//
 // Embedded struct fields are usually marshaled as if their inner exported fields
 // were fields in the outer struct, subject to the usual Go visibility rules amended
 // as described in the next paragraph.
@@ -179,14 +126,14 @@ import (
 // a YAML tag of "-".
 //
 // Map values encode as YAML objects. The map's key type must either be a
-// string, an integer type, or implement [encoding.TextMarshaler]. The map keys
+// string, an integer type, uintptr, float, bool, or implement [encoding.TextMarshaler]. The map keys
 // are sorted and used as YAML object keys by applying the following rules,
 // subject to the UTF-8 coercion described for string values above:
 //   - keys of any string type are used directly
 //   - keys that implement [encoding.TextMarshaler] are marshaled
-//   - integer keys are converted to strings
+//   - number and bool keys are converted to strings
 //
-// Pointer values encode as the value pointed to.
+// Pointer values encode as the value pointed to unless anchor is found.
 // A nil pointer encodes as the null YAML value.
 //
 // Interface values encode as the value contained in the interface.
@@ -196,13 +143,13 @@ import (
 // Attempting to encode such a value causes Marshal to return
 // an [UnsupportedTypeError].
 //
-// YAML cannot represent cyclic data structures and Marshal does not
-// handle them. Passing cyclic structures to Marshal will result in
+// YAML cannot represent cyclic data structures and Marshal does not handle them. Passing cyclic structures to Marshal will result in
 // an error.
 func Marshal(v any) ([]byte, error) {
 	return MarshalWithOptions(v, DefaultEncoderOptions())
 }
 
+// MarshalWithOptions calls [Marshal] with specified global options, see [EncoderOptions]
 func MarshalWithOptions(v any, opts EncoderOptions) ([]byte, error) {
 	e := newEncodeState()
 	defer encodeStatePool.Put(e)
@@ -211,8 +158,6 @@ func MarshalWithOptions(v any, opts EncoderOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	//Marshal does not terminate with \n like Encoder does
-	// e.WriteByte('\n')
 
 	b := append([]byte(nil), e.Bytes()...)
 	//strip \n prefix
@@ -223,14 +168,12 @@ func MarshalWithOptions(v any, opts EncoderOptions) ([]byte, error) {
 	return b, nil
 }
 
-// Marshaler is the interface implemented by types that
-// can marshal themselves into valid YAML.
+// Marshaler is the interface implemented by types that can marshal themselves into valid YAML.
 type Marshaler interface {
 	MarshalYAML() ([]byte, error)
 }
 
-// An UnsupportedTypeError is returned by [Marshal] when attempting
-// to encode an unsupported value type.
+// An UnsupportedTypeError is returned by [Marshal] when attempting to encode an unsupported value type.
 type UnsupportedTypeError struct {
 	Type reflect.Type
 }
@@ -239,8 +182,7 @@ func (e *UnsupportedTypeError) Error() string {
 	return "unknown value type " + e.Type.String()
 }
 
-// An UnsupportedValueError is returned by [Marshal] when attempting
-// to encode an unsupported value.
+// An UnsupportedValueError is returned by [Marshal] when attempting to encode an unsupported value.
 type UnsupportedValueError struct {
 	Value reflect.Value
 	Str   string
@@ -249,20 +191,6 @@ type UnsupportedValueError struct {
 func (e *UnsupportedValueError) Error() string {
 	return "yaml: unsupported value: " + e.Str
 }
-
-// Before Go 1.2, an InvalidUTF8Error was returned by [Marshal] when
-// attempting to encode a string value with invalid UTF-8 sequences.
-// As of Go 1.2, [Marshal] instead coerces the string to valid UTF-8 by
-// replacing invalid bytes with the Unicode replacement rune U+FFFD.
-//
-// Deprecated: No longer used; kept for compatibility.
-// type InvalidUTF8Error struct {
-// 	S string // the whole string value that caused the error
-// }
-//
-// func (e *InvalidUTF8Error) Error() string {
-// 	return "yaml: invalid UTF-8 in string: " + strconv.Quote(e.S)
-// }
 
 // A MarshalerError represents an error from calling a
 // [Marshaler.MarshalYAML] or [encoding.TextMarshaler.MarshalText] method.
@@ -356,6 +284,7 @@ func (e *encodeState) error(err error) {
 	panic(yamlError{err})
 }
 
+// isEmptyValue performs an empty check for an "omitempty" tag value
 func isEmptyValue(v reflect.Value) bool {
 	switch v.Kind() {
 	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
@@ -376,10 +305,12 @@ func (e *encodeState) reflectValue(v reflect.Value, ns nestedState) {
 }
 
 // nestedState keeps a bitmap for the parent type: struct, map or slice/array
+// it can be a determining factor when calculating indent
 type nestedState int
 
 const (
-	//indentPrinted is used mostly for printing slices of slices, so there is no linebreak for the first element
+	//indentPrinted is a special value telling that indent has already been printed
+	// It is  used mostly by slices of slices, so there is no linebreak after the outer "- "
 	indentPrinted nestedState = 1 << iota
 	inSlice
 	inStruct
@@ -549,18 +480,25 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, ns nestedState) {
 	va := v.Addr()
 	if va.IsNil() {
-		e.WriteString("null")
+		b := appendIndent(e, true, ns)
+		e.Write(appendString(b, "null"))
 		return
 	}
 	m := va.Interface().(encoding.TextMarshaler)
-	b, err := m.MarshalText()
+	mt, err := m.MarshalText()
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err, "MarshalText"})
 	}
-	e.Write(b)
+	s := string(mt)
+	b := appendIndent(e, true, ns)
+	if isNeedQuoted(s) {
+		e.Write(strconv.AppendQuote(b, s))
+		return
+	}
+	e.Write(append(b, mt...))
 }
 
-// a helper function to create slice indents with one '-' and spaces
+// a helper function to create block sequence indents with '-' and spaces
 func indent(level, indentNum int, isSlice bool) []byte {
 	if level <= 0 {
 		return nil
@@ -610,7 +548,6 @@ func appendString(dst []byte, str string) []byte {
 }
 
 func boolEncoder(e *encodeState, v reflect.Value, ns nestedState) {
-
 	b := appendIndent(e, true, ns)
 	b = strconv.AppendBool(b, v.Bool())
 	e.Write(b)
@@ -675,7 +612,7 @@ var (
 	float64Encoder = (floatEncoder(64)).encode
 )
 
-// isNeedQuotedOpts checks whether the value needs quote for passed string or not
+// isNeedQuotedOpts checks whether the string value must be quoted
 func isNeedQuotedOpts(value string, opts *EncoderOptions) bool {
 	if opts.JSONStyle {
 		return true
@@ -683,10 +620,10 @@ func isNeedQuotedOpts(value string, opts *EncoderOptions) bool {
 	if opts.LiteralStyleMultiline && strings.ContainsAny(value, "\n\r") {
 		return false
 	}
-	if opts.FlowStyle && strings.ContainsAny(value, `]},'"`) {
-		return true
-	}
 	if opts.FlowStyle {
+		if strings.ContainsAny(value, `]},'"`) {
+			return true
+		}
 		for i := 0; i < len(value); i++ {
 			if value[i] != ':' {
 				continue
@@ -757,8 +694,8 @@ type mapEncoder struct {
 	elemEnc encoderFunc
 }
 
-// if flow style enabled, use this encode, just to make code more clear
-// the map here is nonempty, all checks passed
+// if flow style enabled this encoder is used, just to make code more clear.
+// The map is nonempty, all checks passed
 func (me mapEncoder) encodeFlow(e *encodeState, sv []reflectWithString, ns nestedState) {
 	b := appendIndent(e, true, ns)
 	e.Write(append(b, '{'))
@@ -871,7 +808,7 @@ func newMapEncoder(t reflect.Type) encoderFunc {
 // 	return ok
 // }
 
-// encodeAlias encodes alias if found in anchor's map, returns true is successful
+// encodeAlias encodes alias if it exists in the anchor's map, returns true is successful
 func encodeAlias(e *encodeState, ptr uintptr, alias string) bool {
 	anchor, ok := getAnchor(e, ptr)
 	if ok {
@@ -884,6 +821,7 @@ func encodeAlias(e *encodeState, ptr uintptr, alias string) bool {
 	return ok
 }
 
+// encodeAnchor encodes and stores in the anchor's map the reference, if anchor name is non-empty
 func encodeAnchor(e *encodeState, ptr uintptr, anchor string) {
 	if anchor != "" {
 		anch := storeAnchor(e, ptr, anchor)
@@ -949,10 +887,6 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 		e.Write(append(b, '{'))
 	}
 
-	//each time isAnonymousRef field is processed and anchor pointer found
-	//add its type to anchorsFound. So all fields with anonymousParentTyp
-	//in this map should be skipped without encoding, because there is an *anchor
-	//for the whole struct
 	anchorsFound := make(map[reflect.Type]struct{})
 	//check this when printing a slice of structs, or empty/with private fields only/ structs
 	empty := true
@@ -1029,7 +963,7 @@ func (se structEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) 
 		//merge global flow with field flow
 		e.opts.FlowStyle = e.opts.FlowStyle || f.flow
 		f.encoder(e, fv, inStruct)
-		//and revert back ;)
+		//and revert back
 		e.opts.FlowStyle = oldFlow
 	}
 	//if no fields printed
@@ -1098,8 +1032,7 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 		Here, an array differs from other types in that it prints the required indentation
 		itself, rather than delegating it to the element. If the element is a structure
 		or a map, this applies only to it's first field;
-		the others print the indentation themselves. This is controlled by the bit indentPrinted
-		Alittle bit confusing logic, but this is the only way to encode slices of slices I have found.
+		Somewhat confusing, but this is the only way to encode slices of slices I have found.
 	*/
 	for i := range n {
 		nsChild := inSlice | indentPrinted
@@ -1118,7 +1051,7 @@ func (ae arrayEncoder) encode(e *encodeState, v reflect.Value, ns nestedState) {
 			}
 		}
 		ae.elemEnc(e, el, nsChild)
-		ns = ns &^ indentPrinted //reset the indentPrinted bit, coming from parent ns
+		ns = ns &^ indentPrinted //reset the parent indentPrinted bit
 	}
 }
 
@@ -1273,16 +1206,6 @@ var isZeroerType = reflect.TypeFor[isZeroer]()
 // typeFields returns a list of fields that YAML should recognize for the given type.
 // The algorithm is breadth-first search over the set of structs to include - the top struct
 // and then any reachable anonymous structs.
-//
-// typeFields should be an internal detail,
-// but widely used packages access it using linkname.
-// Notable members of the hall of shame include:
-//   - github.com/bytedance/sonic
-//
-// Do not remove or change the type signature.
-// See go.dev/issue/67401.
-//
-//go:linkname typeFields
 func typeFields(t reflect.Type) structFields {
 	// Anonymous fields to explore at the current level and the next.
 	current := []field{}
@@ -1549,10 +1472,10 @@ func cachedTypeFields(t reflect.Type) structFields {
 	return f.(structFields)
 }
 
-// storeAnchor stores anchor ptr & name in map cache. If cache already
-// has an anchor with the same name but different ptr (name collision)
-// then it makes a unique name by appending number suffix, stores
-// and returns it
+// storeAnchor stores anchor's ptr & name in map cache.
+// If value already present in map but different ptr (name collision),
+// it creates a unique name by appending a number suffix,
+// returns anchor's name
 func storeAnchor(e *encodeState, ptr uintptr, name string) string {
 	if ptr == 0 || name == "" {
 		return ""

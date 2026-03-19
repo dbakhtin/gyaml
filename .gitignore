@@ -1,3 +1,9 @@
 *.prof
 __debug*
 TAGS
+cmd/cmd
+cmd/test.yaml
+cmd/test_v2.yaml
+gyaml.test
+profile.out
+testdata

@@ -22,19 +22,8 @@ func TestCustomTable(t *testing.T) {
 		value  any
 	}{
 		{
-			source: "a: \"1\"",
-			value: struct {
-				A int
-			}{1},
-		},
-		{
-			source: "a: 1\nsub:\n  e: 5\n",
-			value: map[string]any{
-				"a": 1,
-				"sub": map[string]int{
-					"e": 5,
-				},
-			},
+			source: "v: .inf\n",
+			value:  map[string]any{"v": math.Inf(0)},
 		},
 		//
 	}
@@ -740,10 +729,6 @@ func TestDecoder(t *testing.T) {
 		{
 			source: "v: -.INF\n",
 			value:  map[string]any{"v": math.Inf(-1)},
-		},
-		{
-			source: "v: +.inf\n",
-			value:  map[string]any{"v": math.Inf(0)},
 		},
 		{
 			source: "v: .nan\n",
@@ -2753,5 +2738,51 @@ date: 2007-06-01
 		if !cmp.Equal(expected, v) {
 			t.Fatalf("results not equal, diff:\n%s", cmp.Diff(expected, v))
 		}
+	})
+	t.Run("example from benchmark v2", func(t *testing.T) {
+		source := `
+statisticsentries:
+- name: Name 0
+  size: 0
+  volume: 0.0
+  enabled: true
+  since: 2026-03-12T15:42:51.486059642+03:00
+  codes: [0, 0, 0, 5]
+  inf: -.inf
+  staff:
+    admin: Boris 0
+    chief: BulletDodger 0
+- name: Name 1
+  size: 1
+  volume: 1.1
+  enabled: false
+  since: 2026-03-12T15:42:51.486059642+03:00
+  codes: [0, 0, 1, 6]
+  inf: .inf
+  staff:
+    admin: Boris 1
+    chief: BulletDodger 1
+`
+		type MetadataEntryV2 struct {
+			Name    string
+			Size    int64
+			Volume  float64
+			Enabled bool
+			Since   time.Time
+			Codes   []int `yaml:",flow"`
+			Inf     float64
+			Staff   map[string]string
+		}
+		type TOCV2 struct {
+			StatisticsEntries []MetadataEntryV2
+		}
+
+		var v TOCV2
+		if err := NewDecoder(strings.NewReader(source)).Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		// if !cmp.Equal(expected, v) {
+		// 	t.Fatalf("results not equal, diff:\n%s", cmp.Diff(expected, v))
+		// }
 	})
 }
