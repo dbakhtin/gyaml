@@ -7,8 +7,8 @@ The gyaml package enables Go programs to encode and decode YAML text. It was bas
 This package is in its early stage, so errors may occur. Please file an issue with a brief example to help me debug and improve the code. Thank you.
 
 ## Performance comparison (see Makefile & cmd/main.go for a synthetic example):
-* Encoding faster upto **12-15** times than go-yaml, less memory & gc pressure 10-12 times (`make encode` vs `make encodeorig` and `make encodev2` vs `make encodeorigv2`)
-* Decoding faster upto **7-9** times than go-yaml, less memory & gc pressure 15-18 times (`make decode` vs `make decodeorig` and `make decodev2` vs `make decodeorigv2`)
+* Encoding faster upto **12-15** times than go-yaml, 10-12 times less memory & gc pressure (`make encode` vs `make encodeorig` and `make encodev2` vs `make encodeorigv2`)
+* Decoding faster upto **7-9** times than go-yaml, 15-18 times less memory & gc pressure (`make decode` vs `make decodeorig` and `make decodev2` vs `make decodeorigv2`)
 
 ## Key differencies from original go-yaml
 * No MarhshalWithOptions, encoder declaration is closer to encoding/json. So use NewEncoder(...).WithOption for advanced cases.
@@ -28,7 +28,7 @@ This package is in its early stage, so errors may occur. Please file an issue wi
 * Marshal does not terminate result with \n, Encoder does. This is similar to encoder/json behavior.
 
 ## Compatibility
-The gyaml package supports most of YAML 1.2 and does not support merging from YAML 1.1.
+The gyaml package supports most of YAML 1.2 and does not support merging operator `<<` from YAML 1.1.
 
 ## TODO
 * Decoding multi-dimensional block sequences "- - a", "- - - a" (encoding works already). For now use mixed "- [a, b]" or full flow [[a,b],..] styles.
