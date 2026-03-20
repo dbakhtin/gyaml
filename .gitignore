@@ -7,3 +7,4 @@ cmd/test_v2.yaml
 gyaml.test
 profile.out
 testdata
+.vscode
