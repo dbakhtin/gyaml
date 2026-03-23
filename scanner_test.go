@@ -543,3 +543,25 @@ func TestFailedfuzz(t *testing.T) {
 		}
 	})
 }
+
+func TestDirectives(t *testing.T) {
+	t.Run("directives", func(t *testing.T) {
+		tests := []struct {
+			data string
+			ok   bool
+		}{
+			{"%YAML 1.2\n---\n", true},
+			{"%YAML 1.2", true},
+			{" %YAML 1.2", false},
+			{"%AnY 1 #beny", true},
+			{"%YAML 1.2\n---\n", true},
+			{"%YAML 1.2\n ---\n", false},
+			{"%YAML 1.2\nany", false},
+		}
+		for _, tt := range tests {
+			if ok := Valid([]byte(tt.data)); ok != tt.ok {
+				t.Errorf("Valid(%q) = %v, want %v", tt.data, ok, tt.ok)
+			}
+		}
+	})
+}

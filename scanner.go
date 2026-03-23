@@ -544,6 +544,12 @@ func stateBeginValue(s *scanner, c byte) int {
 	case '\'':
 		s.step = stateInStringSq
 		return scanBeginLiteral
+	case '%':
+		if s.idn == 0 {
+			s.step = stateInDirective
+			return scanContinue
+		}
+		return s.error(c, "cannot start any token")
 	case '-':
 		s.step = stateHyphen
 		return scanBeginLiteral
@@ -1062,6 +1068,27 @@ func stateInStringEscU1234567(s *scanner, c byte) int {
 	return s.error(c, "in \\U hexadecimal character escape")
 }
 
+func stateInDirective(s *scanner, c byte) int {
+	if unicode.IsPrint(rune(c)) {
+		s.step = stateInDirective
+		return scanContinue
+	}
+	if isLineBreak(c) {
+		s.step = stateNewDoc
+		return scanContinue
+	}
+	return s.error(c, "in directive statement")
+}
+
+// stateNewDoc is the state after '\n' when document separator "---\n" is expected
+func stateNewDoc(s *scanner, c byte) int {
+	if c == '-' {
+		s.step = stateNewDoc1
+		return scanContinue
+	}
+	return s.error(c, "in new document --- separator")
+}
+
 // stateNewDoc1 is the state after '-' on a new line when document separator "---\n" is expected
 func stateNewDoc1(s *scanner, c byte) int {
 	if c == '-' {
@@ -1188,11 +1215,11 @@ func stateExplicitType1(s *scanner, c byte) int {
 
 // stateExplicitType2 is the state after reading "!!" at the value beginning
 func stateExplicitType2(s *scanner, c byte) int {
-	if 'a' <= c && c <= 'z' {
+	if 'a' <= c && c <= 'z' || c == '/' {
 		s.step = stateExplicitType2
 		return scanContinue
 	}
-	if isWhiteSpace(c) {
+	if isWhiteSpace(c) || c == ':' {
 		s.step = stateBeginValueOrEmpty
 		return scanSkipSpace
 	}
