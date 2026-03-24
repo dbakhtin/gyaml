@@ -94,20 +94,20 @@ func generateSliceV2() TOCV2 {
 }
 
 func runEncoder(toc TOC) {
-	file, _ := os.OpenFile(path.Join("cmd", "test.yaml"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	file, _ := os.OpenFile(path.Join("example", "test.yaml"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	defer file.Close()
 	// refresh GC
 	runtime.GC()
 	start := time.Now()
 	if *original {
 		enc := yaml.NewEncoder(file)
-		fmt.Println("Encoding slice into cmd/test.yaml file")
+		fmt.Println("Encoding slice into example/test.yaml file")
 		err := enc.Encode(toc)
 		log.Printf("Time spent encoding: %s\n", time.Since(start))
 		panicOnErr(err)
 	} else {
 		enc := gyaml.NewEncoder(file)
-		fmt.Println("Encoding slice into cmd/test.yaml file")
+		fmt.Println("Encoding slice into example/test.yaml file")
 		err := enc.Encode(toc)
 		log.Printf("Time spent encoding: %s\n", time.Since(start))
 		panicOnErr(err)
@@ -115,20 +115,20 @@ func runEncoder(toc TOC) {
 }
 
 func runEncoderV2(toc TOCV2) {
-	file, _ := os.OpenFile(path.Join("cmd", "test_v2.yaml"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	file, _ := os.OpenFile(path.Join("example", "test_v2.yaml"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	defer file.Close()
 	// refresh GC
 	runtime.GC()
 	start := time.Now()
 	if *original {
 		enc := yaml.NewEncoder(file)
-		fmt.Println("Encoding slice into cmd/test_v2.yaml file")
+		fmt.Println("Encoding slice into example/test_v2.yaml file")
 		err := enc.Encode(toc)
 		log.Printf("Time spent encoding: %s\n", time.Since(start))
 		panicOnErr(err)
 	} else {
 		enc := gyaml.NewEncoder(file)
-		fmt.Println("Encoding slice into cmd/test_v2.yaml file")
+		fmt.Println("Encoding slice into example/test_v2.yaml file")
 		err := enc.Encode(toc)
 		log.Printf("Time spent encoding: %s\n", time.Since(start))
 		panicOnErr(err)
@@ -137,7 +137,7 @@ func runEncoderV2(toc TOCV2) {
 
 func runDecoder() {
 	var toc TOC
-	file, err := os.OpenFile(path.Join("cmd", "test.yaml"), os.O_RDONLY, 0644)
+	file, err := os.OpenFile(path.Join("example", "test.yaml"), os.O_RDONLY, 0644)
 	if err != nil {
 		log.Fatal("error opening test.yaml file with sample data, please run encode task first")
 	}
@@ -147,13 +147,13 @@ func runDecoder() {
 	start := time.Now()
 	if *original {
 		dec := yaml.NewDecoder(file)
-		fmt.Println("Processing data from cmd/test.yaml file")
+		fmt.Println("Processing data from example/test.yaml file")
 		err := dec.Decode(&toc)
 		log.Printf("Time spent decoding: %s\n", time.Since(start))
 		panicOnErr(err)
 	} else {
 		dec := gyaml.NewDecoder(file)
-		fmt.Println("Reading data from cmd/test.yaml file")
+		fmt.Println("Reading data from example/test.yaml file")
 		err := dec.Decode(&toc)
 		log.Printf("Time spent decoding: %s\n", time.Since(start))
 		panicOnErr(err)
@@ -176,7 +176,7 @@ func runDecoder() {
 
 func runDecoderV2() {
 	var toc TOCV2
-	file, err := os.OpenFile(path.Join("cmd", "test_v2.yaml"), os.O_RDONLY, 0644)
+	file, err := os.OpenFile(path.Join("example", "test_v2.yaml"), os.O_RDONLY, 0644)
 	if err != nil {
 		log.Fatal("error opening test_v2.yaml file with sample data, please run encode task first")
 	}
@@ -186,13 +186,13 @@ func runDecoderV2() {
 	start := time.Now()
 	if *original {
 		dec := yaml.NewDecoder(file)
-		fmt.Println("Processing data from cmd/test_v2.yaml file")
+		fmt.Println("Processing data from example/test_v2.yaml file")
 		err := dec.Decode(&toc)
 		log.Printf("Time spent decoding: %s\n", time.Since(start))
 		panicOnErr(err)
 	} else {
 		dec := gyaml.NewDecoder(file)
-		fmt.Println("Reading data from cmd/test_v2.yaml file")
+		fmt.Println("Reading data from example/test_v2.yaml file")
 		err := dec.Decode(&toc)
 		log.Printf("Time spent decoding: %s\n", time.Since(start))
 		panicOnErr(err)

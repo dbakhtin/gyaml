@@ -2888,6 +2888,5 @@ plugins:
 		if err := NewDecoder(strings.NewReader(source)).Decode(&v); err != nil {
 			t.Fatal(err)
 		}
-		t.Error(v["markdown_extensions"])
 	})
 }

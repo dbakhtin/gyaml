@@ -4,20 +4,20 @@ The gyaml package enables Go programs to encode and decode YAML text. It was bas
 [go-yaml](https://github.com/goccy/go-yaml) and standard `encoding/json` projects. The idea was to preserve encoding/json performance (as much as possible) and go-yaml's flexibility.
 
 ## Attention
-This package is in its early stage, so errors may occur. Please file an issue with a brief example to help me debug and improve the code. Thank you.
+Although all tests are passing, errors may occur. Please file an issue with a brief example to help me debug and improve the code. Thank you.
 
-## Performance comparison (see Makefile & cmd/main.go for a synthetic example):
+## Performance comparison (see Makefile & example/main.go for a synthetic example):
 * Encoding faster upto **12-15** times than go-yaml, 10-12 times less memory & gc pressure (`make encode` and `make encodev2` for a little bit more complex data structure)
 * Decoding faster upto **7-9** times than go-yaml, 15-18 times less memory & gc pressure (`make decode` and `make decodev2`, run them only after encoders have created a corresponding test yaml file)
 
 ## Key differencies from original go-yaml
 * No MarhshalWithOptions, encoder declaration is closer to encoding/json. So use NewEncoder(...).WithOption for advanced cases.
-* No custom marshalers map, implement MarshalYAML for field types & MarshalText for map fields similar to encoding/json
+* No custom marshalers map, just implement MarshalYAML or MarshalText when needed.
 * Smart anchor is enabled for structs by default. That means if encoder sees an anchor name collision it adds a unique number suffix.
 * No smart anchors for maps
 * No MapSlice data type
 * No JSON marshaler
-* No yaml comments
+* No yaml comments, they are ignored
 * Embedded structs are inlined by default with same priority shadowing as in encoding/json
 * "inline" tag is not supported, use embedding instead
 * Numbers are encoded and decoded without quotes, i.e "1" can't be deserialized into int (may add this in future if really needed)

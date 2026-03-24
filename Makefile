@@ -1,35 +1,36 @@
 .PHONY: encode encodev2 decode decodev2 cpuprof fuzz build
+cmd := example/example
 
 encode: build
 	@echo ">>> gyaml encoder <<<"
-	@cmd/cmd
+	@$(cmd)
 	@echo ">>> go-yaml encoder <<<"
-	@cmd/cmd --original
+	@$(cmd) --original
 
 encodev2: build
 	@echo ">>> gyaml encoder, more compex data <<<"
-	@cmd/cmd --v2
+	@$(cmd) --v2
 	@echo ">>> go-yaml encoder, more complex data <<<"
-	@cmd/cmd --original --v2
+	@$(cmd) --original --v2
 
 decode: build
 	@echo ">>> gyaml decoder <<<"
-	@cmd/cmd --decode
+	@$(cmd) --decode
 	@echo ">>> go-yaml decoder <<<"
-	@cmd/cmd --original --decode
+	@$(cmd) --decode --original
 
 decodev2: build
 	@echo ">>> gyaml decoder, more complex data <<<"
-	@cmd/cmd --decode --v2
+	@$(cmd) --decode --v2
 	@echo ">>> go-yaml decoder, more complex data <<<"
-	@cmd/cmd --original --decode --v2
+	@$(cmd) --decode --v2 --original
 
 build:
-	@go build -o cmd/cmd cmd/main.go
+	@go build -o $(cmd) example/main.go
 
 cpuprof: build
 	@echo "showing cpu benchmark stats"
-	go tool pprof cmd/cmd cpu.prof
+	go tool pprof $(cmd) cpu.prof
 
 fuzz:
 	@go test -fuzz=FuzzUnmarshalToMap
